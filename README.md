@@ -1,25 +1,60 @@
-# bevy_ecs_dynamic
+# bevy_mod_dynamic_query
 
-Utilities for working with `bevy_ecs` in situations where the types you're dealing with might not be known at compile time (e.g. scripting, modding).
+Fork of <https://github.com/jakobhellermann/bevy_ecs_dynamic>, a prototype
+for dynamic queries in bevy.
 
-# Example Usage
+`bevy_ecs_dynamic` was severly out of date and was missing a few query parameters:
 
-## Dynamic Query
+- `Or<(…)>`
+- `Option<Component>`
+- Some other kind of queries that are a combinations of the previous
 
-```rust
-let component_id_1 = world.init_component::<TestComponent1>();
-let component_id_2 = world.init_component::<TestComponent2>();
+In logic, we can always express a logical expression as a [disjunction of
+conjunctions][dnf]. So we can use a `Vec<Vec<Filter>>` to express `Or`s.
 
-world.spawn().insert(TestComponent1).insert(TestComponent2);
-world.spawn().insert(TestComponent1);
+[dnf]: https://en.wikipedia.org/wiki/Disjunctive_normal_form
 
-let mut query = DynamicQuery::new(&world, vec![FetchKind::Ref(component_id_1)], vec![FilterKind::Without(component_id_2)]);
-assert_eq!(query.iter(&world).count(), 1);
+We can always provide an API that accepts a arbitrary logic expression and
+flatten it if necessary.
+
+### External API draft
+
+Suppose we have a script that wants to query anything.
+
+```javascript
+function damage_system(q) {
+  for (item in q) {
+    let [health, damage, opt_armor] = item;
+    var real_damage = damage;
+    if (opt_armor != null) {
+      if (opt_armor > damage) {
+        real_damage -= opt_armor;
+      } else {
+        real_damage = 1;
+      }
+    }
+    health.set(health.get() - real_damage);
+  }
+}
+// equivalent to:
+// Query<
+//     (&mut Health, &Damage, Option<&Armor>),
+//     Or<(
+//         (With<Player>, Without<Invicible>),
+//         (With<Enemy>, Without<FirstBossYouAreMeantToDieFrom>),
+//     )>
+// >,
+var my_query = {
+  fetch: [
+    mut("Health"),
+    read("Damage"),
+    read_nullable("Armor"),
+  ],
+  filter: or(
+    and("Player", not("Invicible")),
+    and("Enemy", not("FirstBossYouAreMeantToDieFrom")),
+  ),
+};
+runtime.register_system(my_query, damage_system);
 ```
 
-
-# Bevy support table
-
-| bevy | bevy\_ecs\_dynamic |
-| ---- | ------------------ |
-| 0.8  | _unreleased_       |
