@@ -10,7 +10,7 @@ use crate::OrFilters;
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Row {
     pub(crate) entity: Entity,
-    pub(crate) table_row: TableRow,
+    pub(crate) row: TableRow,
 }
 
 #[derive(Default)]

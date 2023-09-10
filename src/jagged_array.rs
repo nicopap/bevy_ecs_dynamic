@@ -80,10 +80,7 @@ impl<V> JaggedArray<V> {
         self.data.get(direct_index)
     }
     pub fn rows_iter(&self) -> JaggedArrayRows<V> {
-        JaggedArrayRows {
-            array: self,
-            row: 0,
-        }
+        JaggedArrayRows { array: self, row: 0 }
     }
 }
 

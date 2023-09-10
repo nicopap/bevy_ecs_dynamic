@@ -9,11 +9,11 @@ use crate::dynamic_query::{DynamicItem, Row};
 use crate::jagged_array::{JaggedArray, JaggedArrayRows};
 
 pub enum Fetch {
-    Entity,
     Read(ComponentId),
     Mut(ComponentId),
     OptionRead(ComponentId),
     OptionMut(ComponentId),
+    Entity,
 }
 impl Fetch {
     const READ_IDX: usize = 0;
@@ -31,6 +31,7 @@ impl fmt::Debug for FetchComponent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FetchComponent")
             .field("id", &self.id)
+            .field("from_ptr", &"<inscrutable ReflectFromPtr>")
             .finish()
     }
 }
@@ -63,7 +64,9 @@ impl Fetches {
         found.count_ones(..) == comps.len()
     }
 
-    // SAFETY: `table` must contains the non-option components of this [`Fetches`].
+    /// # Safety
+    /// - `table` must contains the non-option components of this [`Fetches`].
+    /// - You must have mut/read access to the mut/read components in this `Fetches`.
     pub unsafe fn iter<'s, 'w>(
         &'s self,
         table: &'w Table,
@@ -93,7 +96,9 @@ pub struct FetchesIter<'s, 'w, F: FnMut(FetchComponent) -> (usize, FetchComponen
     entity: Row,
 }
 impl<'s, 'w> FetchesIter<'s, 'w, fn(FetchComponent) -> (usize, FetchComponent)> {
-    // SAFETY: `table` must contains the non-option components of `fetches`.
+    /// # Safety
+    /// - `table` must contains the non-option components of this [`Fetches`].
+    /// - You must have mut/read access to the mut/read components in this `Fetches`.
     unsafe fn new(
         has_entity: bool,
         fetches: &'s JaggedArray<FetchComponent>,
@@ -118,13 +123,16 @@ impl<'s, 'w, F: FnMut(FetchComponent) -> (usize, FetchComponent)> Iterator
             return Some(DynamicItem::Entity(self.entity.entity));
         }
         let (i, comp) = self.fetches.next()?;
-        let row = self.entity.table_row;
+        let row = self.entity.row;
         let column = self.table.get_column(comp.id);
 
         match i {
             // TODO(BUG): missing handling of sparse set components
             Fetch::READ_IDX => {
-                // SAFETY: `Self::new`'s invariant ensures this is always Some.
+                // SAFETY:
+                // - (1, 2): `Self::new`'s invariant ensures this is always Some.
+                // - (3): By construction, the `ReflectFromPtr` is always the one for what we
+                //   are fetching
                 let column = unsafe { column.release_unchecked_unwrap() };
                 let ptr = unsafe { column.get_data(row).release_unchecked_unwrap() };
                 let reflect = unsafe { comp.from_ptr.as_reflect_ptr(ptr) };
@@ -132,7 +140,7 @@ impl<'s, 'w, F: FnMut(FetchComponent) -> (usize, FetchComponent)> Iterator
                 Some(DynamicItem::Read(reflect))
             }
             Fetch::MUT_IDX => {
-                // SAFETY: `Self::new`'s invariant ensures this is always Some.
+                // SAFETY: Same as above
                 let column = unsafe { column.release_unchecked_unwrap() };
                 let ptr = unsafe { column.get_data_mut(row).release_unchecked_unwrap() };
                 let reflect = unsafe { comp.from_ptr.as_reflect_ptr_mut(ptr) };
@@ -140,15 +148,15 @@ impl<'s, 'w, F: FnMut(FetchComponent) -> (usize, FetchComponent)> Iterator
                 Some(DynamicItem::Mut(reflect))
             }
             Fetch::OPTION_READ_IDX => {
-                // SAFETY: `Self::new`'s invariant ensures this is always Some.
-                let ptr = column.and_then(|c| unsafe { c.get_data(row) });
+                // SAFETY: Same as point (3) of above
+                let ptr = column.and_then(|c| c.get_data(row));
                 let reflect = unsafe { ptr.map(|p| comp.from_ptr.as_reflect_ptr(p)) };
 
                 Some(DynamicItem::OptionRead(reflect))
             }
             Fetch::OPTION_MUT_IDX => {
-                // SAFETY: `Self::new`'s invariant ensures this is always Some.
-                let ptr = column.and_then(|c| unsafe { c.get_data_mut(row) });
+                // SAFETY: Same as point (3) of above
+                let ptr = column.and_then(|c| c.get_data_mut(row));
                 let reflect = unsafe { ptr.map(|p| comp.from_ptr.as_reflect_ptr_mut(p)) };
 
                 Some(DynamicItem::OptionMut(reflect))

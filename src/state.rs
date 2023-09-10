@@ -23,22 +23,20 @@ impl MaybeDynamicItem {
     fn uninit() -> Self {
         MaybeDynamicItem(MaybeUninit::uninit())
     }
-    /// Note that you must never call `self.assume_init[_mut]` with a lifetime outliving `'s`.
-    fn set<'s>(&mut self, value: DynamicItem<'s>) {
+    /// Note that you must never call `assume_init[_mut]` with a lifetime outliving `'w`.
+    fn set<'w>(&mut self, value: DynamicItem<'w>) {
         // SAFETY: This is safe as long as we don't dereference the stored value
         // with an eroneous lifetime. Which is guarenteed by the other methods
         // in this `impl` block.
-        let static_value = unsafe { transmute::<DynamicItem<'s>, DynamicItem<'static>>(value) };
+        let static_value = unsafe { transmute::<DynamicItem<'w>, DynamicItem<'static>>(value) };
 
         self.0.write(static_value);
     }
 }
 
-unsafe fn assume_init<'s, 'w>(items: &'s [MaybeDynamicItem]) -> &'s [DynamicItem<'w>] {
-    // SAFETY: I really don't know
-    unsafe { transmute(items) }
-}
-
+/// SAFETY:
+/// - All items must outlive `'w`.
+/// - All items must be initialized.
 unsafe fn assume_init_mut<'s, 'w>(items: &'s mut [MaybeDynamicItem]) -> &'s mut [DynamicItem<'w>] {
     // SAFETY: I really don't know
     unsafe { transmute(items) }
@@ -51,7 +49,7 @@ fn archetype_id_to_u32(id: ArchetypeId) -> u32 {
 #[derive(Default, Clone, Debug)]
 struct MatchedArchetypes(FixedBitSet);
 impl MatchedArchetypes {
-    fn add_archetype(&self, id: ArchetypeId) {
+    fn add_archetype(&mut self, id: ArchetypeId) {
         let id = archetype_id_to_u32(id);
         self.0.grow(id as usize + 1);
         self.0.set(id as usize, true);
@@ -108,7 +106,7 @@ impl DynamicState {
 
     /// Overwrites `self.item_buffer` with the `fetch` items from provided
     /// table row and returns the buffer as-is.
-    fn buffer_row<'s, 'w>(&'s self, table: &'w Table, row: Row) -> &'s mut [DynamicItem<'w>] {
+    fn buffer_row<'s, 'w>(&'s mut self, table: &'w Table, row: Row) -> &'s mut [DynamicItem<'w>] {
         assert_eq!(self.fetches.len(), self.item_buffer.len());
 
         let iter = unsafe { self.fetches.iter(table, row) };
@@ -166,14 +164,13 @@ impl DynamicState {
         let table = unsafe { world.storages().tables.get(location.table_id) };
         let table = unsafe { table.release_unchecked_unwrap() };
 
-        if !self
-            .filters
-            .within_tick(table, location.table_row, last_run, this_run)
-        {
+        let row = location.table_row;
+        let mut conjunctions = self.filters.tick_conjunctions(last_run, this_run);
+        if !conjunctions.any(|c| c.within_tick(archetype, table, row)) {
             return Err(DynamicQueryError::NotInTick(entity));
         }
-        let table_row = location.table_row;
-        Ok(self.buffer_row(table, Row { entity, table_row }))
+        drop(conjunctions);
+        Ok(self.buffer_row(table, Row { entity, row }))
     }
     pub fn get<'w, 's>(
         &'s mut self,
@@ -181,7 +178,7 @@ impl DynamicState {
         entity: Entity,
     ) -> Result<&'s [DynamicItem<'w>], DynamicQueryError> {
         let last_run = world.last_change_tick();
-        let this_run = world.change_tick();
+        let this_run = todo!();
         let world = world.as_unsafe_world_cell_readonly();
         self.get_unchecked_manual(world, entity, last_run, this_run)
             .map(|x| &*x)
