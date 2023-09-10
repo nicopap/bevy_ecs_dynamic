@@ -1,11 +1,12 @@
 use std::{fmt, iter, slice};
 
-use bevy_ecs::{component::ComponentId, storage::Table};
+use bevy_ecs::component::ComponentId;
+use bevy_ecs::world::unsafe_world_cell::UnsafeEntityCell;
 use bevy_reflect::ReflectFromPtr;
 use fixedbitset::FixedBitSet;
 
 use crate::debug_unchecked::DebugUnchecked;
-use crate::dynamic_query::{DynamicItem, Row};
+use crate::dynamic_query::DynamicItem;
 use crate::jagged_array::{JaggedArray, JaggedArrayRows};
 
 pub enum Fetch {
@@ -23,7 +24,7 @@ impl Fetch {
 }
 
 #[derive(Clone)]
-pub(super) struct FetchComponent {
+pub struct FetchComponent {
     id: ComponentId,
     from_ptr: ReflectFromPtr,
 }
@@ -37,10 +38,10 @@ impl fmt::Debug for FetchComponent {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct Fetches {
-    pub(super) has_entity: bool,
+pub struct Fetches {
+    pub(crate) has_entity: bool,
     // TODO(perf): do not store the TypeId, which is 128 bits
-    pub(super) components: JaggedArray<FetchComponent>,
+    pub(crate) components: JaggedArray<FetchComponent>,
 }
 impl Fetches {
     pub const fn len(&self) -> usize {
@@ -69,10 +70,9 @@ impl Fetches {
     /// - You must have mut/read access to the mut/read components in this `Fetches`.
     pub unsafe fn iter<'s, 'w>(
         &'s self,
-        table: &'w Table,
-        entity: Row,
+        entity: UnsafeEntityCell<'w>,
     ) -> FetchesIter<'s, 'w, impl FnMut(FetchComponent) -> (usize, FetchComponent)> {
-        unsafe { FetchesIter::new(self.has_entity, &self.components, table, entity) }
+        unsafe { FetchesIter::new(self.has_entity, &self.components, entity) }
     }
 }
 
@@ -92,8 +92,7 @@ fn mapmap(
 pub struct FetchesIter<'s, 'w, F: FnMut(FetchComponent) -> (usize, FetchComponent)> {
     has_entity: bool,
     fetches: FetchRows<'s, F>,
-    table: &'w Table,
-    entity: Row,
+    entity: UnsafeEntityCell<'w>,
 }
 impl<'s, 'w> FetchesIter<'s, 'w, fn(FetchComponent) -> (usize, FetchComponent)> {
     /// # Safety
@@ -102,13 +101,11 @@ impl<'s, 'w> FetchesIter<'s, 'w, fn(FetchComponent) -> (usize, FetchComponent)> 
     unsafe fn new(
         has_entity: bool,
         fetches: &'s JaggedArray<FetchComponent>,
-        table: &'w Table,
-        entity: Row,
+        entity: UnsafeEntityCell<'w>,
     ) -> FetchesIter<'s, 'w, impl FnMut(FetchComponent) -> (usize, FetchComponent)> {
         FetchesIter {
             has_entity,
             fetches: fetches.rows_iter().enumerate().flat_map(mapmap),
-            table,
             entity,
         }
     }
@@ -120,43 +117,39 @@ impl<'s, 'w, F: FnMut(FetchComponent) -> (usize, FetchComponent)> Iterator
     fn next(&mut self) -> Option<Self::Item> {
         if self.has_entity {
             self.has_entity = false;
-            return Some(DynamicItem::Entity(self.entity.entity));
+            return Some(DynamicItem::Entity(self.entity.id()));
         }
         let (i, comp) = self.fetches.next()?;
-        let row = self.entity.row;
-        let column = self.table.get_column(comp.id);
-
         match i {
-            // TODO(BUG): missing handling of sparse set components
             Fetch::READ_IDX => {
                 // SAFETY:
-                // - (1, 2): `Self::new`'s invariant ensures this is always Some.
-                // - (3): By construction, the `ReflectFromPtr` is always the one for what we
+                // - (1): `Self::new`'s invariant ensures this is always Some.
+                // - (2): By construction, the `ReflectFromPtr` is always the one for what we
                 //   are fetching
-                let column = unsafe { column.release_unchecked_unwrap() };
-                let ptr = unsafe { column.get_data(row).release_unchecked_unwrap() };
+                let ptr = unsafe { self.entity.get_by_id(comp.id).prod_unchecked_unwrap() };
                 let reflect = unsafe { comp.from_ptr.as_reflect_ptr(ptr) };
 
                 Some(DynamicItem::Read(reflect))
             }
             Fetch::MUT_IDX => {
                 // SAFETY: Same as above
-                let column = unsafe { column.release_unchecked_unwrap() };
-                let ptr = unsafe { column.get_data_mut(row).release_unchecked_unwrap() };
+                let ptr = unsafe { self.entity.get_by_id(comp.id).prod_unchecked_unwrap() };
+                let ptr = unsafe { ptr.assert_unique() };
                 let reflect = unsafe { comp.from_ptr.as_reflect_ptr_mut(ptr) };
 
                 Some(DynamicItem::Mut(reflect))
             }
             Fetch::OPTION_READ_IDX => {
                 // SAFETY: Same as point (3) of above
-                let ptr = column.and_then(|c| c.get_data(row));
+                let ptr = unsafe { self.entity.get_by_id(comp.id) };
                 let reflect = unsafe { ptr.map(|p| comp.from_ptr.as_reflect_ptr(p)) };
 
                 Some(DynamicItem::OptionRead(reflect))
             }
             Fetch::OPTION_MUT_IDX => {
                 // SAFETY: Same as point (3) of above
-                let ptr = column.and_then(|c| c.get_data_mut(row));
+                let ptr = unsafe { self.entity.get_by_id(comp.id) };
+                let ptr = unsafe { ptr.map(|p| p.assert_unique()) };
                 let reflect = unsafe { ptr.map(|p| comp.from_ptr.as_reflect_ptr_mut(p)) };
 
                 Some(DynamicItem::OptionMut(reflect))

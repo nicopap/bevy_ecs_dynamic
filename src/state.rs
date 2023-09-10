@@ -1,14 +1,13 @@
 use std::mem::{transmute, MaybeUninit};
 
 use bevy_ecs::archetype::{Archetype, ArchetypeId, Archetypes};
+use bevy_ecs::world::unsafe_world_cell::UnsafeEntityCell;
 use bevy_ecs::world::{unsafe_world_cell::UnsafeWorldCell, World};
-use bevy_ecs::{component::Tick, prelude::Entity, reflect::AppTypeRegistry, storage::Table};
-use bevy_reflect::TypeRegistryArc;
+use bevy_ecs::{component::Tick, prelude::Entity};
 use fixedbitset::FixedBitSet;
 use thiserror::Error;
 
-use crate::debug_unchecked::DebugUnchecked;
-use crate::dynamic_query::{DynamicItem, DynamicQuery, Row};
+use crate::dynamic_query::{DynamicItem, DynamicQuery};
 use crate::iter::{DynamicQueryIter, RoDynamicQueryIter};
 use crate::{fetches::Fetches, filters::Filters};
 
@@ -37,7 +36,7 @@ impl MaybeDynamicItem {
 /// SAFETY:
 /// - All items must outlive `'w`.
 /// - All items must be initialized.
-unsafe fn assume_init_mut<'s, 'w>(items: &'s mut [MaybeDynamicItem]) -> &'s mut [DynamicItem<'w>] {
+unsafe fn assume_init_mut<'w>(items: &mut [MaybeDynamicItem]) -> &mut [DynamicItem<'w>] {
     // SAFETY: I really don't know
     unsafe { transmute(items) }
 }
@@ -63,7 +62,6 @@ impl MatchedArchetypes {
 
 #[derive(Clone, Debug)]
 pub struct DynamicState {
-    registry: TypeRegistryArc,
     fetches: Fetches,
     filters: Filters,
     archetype_ids: MatchedArchetypes,
@@ -74,15 +72,13 @@ impl DynamicState {
     // - Query caching
     // - mutal exclusion rules
     pub fn in_world(query: &DynamicQuery, world: &mut World) -> Self {
-        let registry = world.resource::<AppTypeRegistry>().0.clone();
-        Self::new(query, registry, world.archetypes())
+        Self::new(query, world.archetypes())
     }
-    pub fn new(query: &DynamicQuery, registry: TypeRegistryArc, world: &Archetypes) -> Self {
+    pub fn new(query: &DynamicQuery, world: &Archetypes) -> Self {
         let item_count = query.fetches.len();
         let item_buffer = vec![MaybeDynamicItem::uninit(); item_count].into();
 
         let mut state = DynamicState {
-            registry,
             fetches: query.fetches.clone(),
             filters: query.filters.clone(),
             archetype_ids: MatchedArchetypes::default(),
@@ -94,22 +90,32 @@ impl DynamicState {
         state
     }
     // TODO(perf): O(n * c) where 'n' size of archetype & 'c' number of conjunctions
-    /// Verify if this `DynamicState` matches `archetype`, adding it to the list
-    /// of archetypes it accesses if so.
-    pub fn add_archetype(&mut self, archetype: &Archetype) {
+    /// Verify if this `DynamicState` matches `archetype`, adding it to its internal list
+    /// of archetypes and returns `true` if so.
+    ///
+    /// This returns `true` even if the archetype is already part of the list.
+    ///
+    /// # Performance
+    ///
+    /// This is `O(n * c)` where 'n' is the size of the archetype and 'c' is
+    /// the number of filter conjunctions (ie: `Or` clauses).
+    pub fn add_archetype(&mut self, archetype: &Archetype) -> bool {
+        let mut matches = false;
         for conjunction in self.filters.conjunctions(&self.fetches) {
             if conjunction.includes_archetype(archetype) {
+                matches = true;
                 self.archetype_ids.add_archetype(archetype.id());
             }
         }
+        matches
     }
 
     /// Overwrites `self.item_buffer` with the `fetch` items from provided
     /// table row and returns the buffer as-is.
-    fn buffer_row<'s, 'w>(&'s mut self, table: &'w Table, row: Row) -> &'s mut [DynamicItem<'w>] {
+    fn buffer_row<'s, 'w>(&'s mut self, entity: UnsafeEntityCell<'w>) -> &'s mut [DynamicItem<'w>] {
         assert_eq!(self.fetches.len(), self.item_buffer.len());
 
-        let iter = unsafe { self.fetches.iter(table, row) };
+        let iter = unsafe { self.fetches.iter(entity) };
         self.item_buffer.iter_mut().zip(iter).for_each(|(i, v)| {
             i.set(v);
         });
@@ -150,35 +156,26 @@ impl DynamicState {
         this_run: Tick,
     ) -> Result<&'s mut [DynamicItem<'w>], DynamicQueryError> {
         let dangling_entity = DynamicQueryError::DanglingEntity(entity);
-        let location = world.entities().get(entity).ok_or(dangling_entity)?;
-        let entity_archetype = location.archetype_id;
-        if self.archetype_ids.contains(entity_archetype) {
-            return Err(DynamicQueryError::InvalidEntity(entity));
+        let entity = world.get_entity(entity).ok_or(dangling_entity)?;
+        let archetype = entity.archetype();
+        if !self.archetype_ids.contains(archetype.id()) {
+            return Err(DynamicQueryError::InvalidEntity(entity.id()));
         }
-        let archetype = world.archetypes().get(entity_archetype);
 
-        // SAFETY (1, 3): Assumption is that `location.archetype_id` exists in this world
-        // if it was returned from `world.entities`
-        // SAFETY (2): We early-returned
-        let archetype = unsafe { archetype.release_unchecked_unwrap() };
-        let table = unsafe { world.storages().tables.get(location.table_id) };
-        let table = unsafe { table.release_unchecked_unwrap() };
-
-        let row = location.table_row;
         let mut conjunctions = self.filters.tick_conjunctions(last_run, this_run);
-        if !conjunctions.any(|c| c.within_tick(archetype, table, row)) {
-            return Err(DynamicQueryError::NotInTick(entity));
+        if !conjunctions.any(|c| c.within_tick(entity)) {
+            return Err(DynamicQueryError::NotInTick(entity.id()));
         }
         drop(conjunctions);
-        Ok(self.buffer_row(table, Row { entity, row }))
+        Ok(self.buffer_row(entity))
     }
     pub fn get<'w, 's>(
         &'s mut self,
         world: &'w World,
         entity: Entity,
+        last_run: Tick,
     ) -> Result<&'s [DynamicItem<'w>], DynamicQueryError> {
-        let last_run = world.last_change_tick();
-        let this_run = todo!();
+        let this_run = world.last_change_tick();
         let world = world.as_unsafe_world_cell_readonly();
         self.get_unchecked_manual(world, entity, last_run, this_run)
             .map(|x| &*x)

@@ -31,7 +31,7 @@ impl<V> JaggedArray<V> {
 
         let mut previous_end = 0;
         let last_end = data.len() as u32;
-        for (i, end) in ends.iter().enumerate() {
+        for end in ends.iter() {
             if *end > last_end {
                 return None;
             }

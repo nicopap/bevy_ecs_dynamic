@@ -1,6 +1,6 @@
 use bevy_ecs::archetype::Archetype;
 use bevy_ecs::component::{ComponentId, Tick};
-use bevy_ecs::storage::{Table, TableRow};
+use bevy_ecs::world::unsafe_world_cell::UnsafeEntityCell;
 use fixedbitset::FixedBitSet;
 
 use crate::debug_unchecked::DebugUnchecked;
@@ -43,11 +43,12 @@ impl Filter {
         let masked = self.component & Self::MASK;
         ComponentId::new(masked as usize)
     }
-    pub const fn kind(&self) -> FilterKind {
+    #[allow(unused)]
+    const fn kind(&self) -> FilterKind {
         let unmasked = self.component >> Self::KIND_OFFSET;
         FilterKind::from_u32(unmasked)
     }
-    pub fn new(kind: FilterKind, id: ComponentId) -> Self {
+    fn new(kind: FilterKind, id: ComponentId) -> Self {
         let kind_mask = (kind as u32) << Self::KIND_OFFSET;
         let id_mask = id.index() as u32;
         let component = kind_mask | id_mask;
@@ -74,16 +75,16 @@ impl Filters {
         let conjunction = |filters| Conjunction { filters, fetches };
         self.0.rows_iter().map(conjunction)
     }
-    pub fn tick_conjunctions<'a>(
-        &'a self,
+    pub fn tick_conjunctions(
+        &self,
         last_run: Tick,
         this_run: Tick,
-    ) -> impl Iterator<Item = TickConjunction<'a>> + 'a {
+    ) -> impl Iterator<Item = TickConjunction> + '_ {
         let conjunction = move |filters| TickConjunction { filters, last_run, this_run };
         self.0.rows_iter().map(conjunction)
     }
 }
-fn tick_filters<'a>(filters: &'a [Filter]) -> (ChangedFilter<'a>, AddedFilter<'a>) {
+fn tick_filters(filters: &[Filter]) -> (ChangedFilter, AddedFilter) {
     // A Filter value that always fit at the very end of the inclusive filters range.
     let mut last_with = Filter::new(FilterKind::Changed, ComponentId::new(0));
     let mut last_changed = Filter::new(FilterKind::Added, ComponentId::new(0));
@@ -96,22 +97,22 @@ fn tick_filters<'a>(filters: &'a [Filter]) -> (ChangedFilter<'a>, AddedFilter<'a
     let first_added = filters.binary_search(&last_changed).err();
     let first_without = filters.binary_search(&last_added).err();
 
-    let first_changed = unsafe { first_changed.release_unchecked_unwrap() };
-    let first_added = unsafe { first_added.release_unchecked_unwrap() };
-    let first_without = unsafe { first_without.release_unchecked_unwrap() };
+    let first_changed = unsafe { first_changed.prod_unchecked_unwrap() };
+    let first_added = unsafe { first_added.prod_unchecked_unwrap() };
+    let first_without = unsafe { first_without.prod_unchecked_unwrap() };
 
     let changed_filter = ChangedFilter(&filters[first_changed..first_added]);
     let added_filter = AddedFilter(&filters[first_added..first_without]);
     (changed_filter, added_filter)
 }
-fn filters<'a>(filters: &'a [Filter]) -> (InclusiveFilter<'a>, ExclusiveFilter<'a>) {
+fn filters(filters: &[Filter]) -> (InclusiveFilter, ExclusiveFilter) {
     // A Filter value that always fit at the very end of the inclusive filters range.
     let mut last_inclusive = Filter::new(FilterKind::Without, ComponentId::new(0));
     last_inclusive.component -= 1;
 
     // SAFETY: If we find a componet with an ID equal to 2**30, something fishy is going on
     let first_exclusive = filters.binary_search(&last_inclusive).err();
-    let first_exclusive = unsafe { first_exclusive.release_unchecked_unwrap() };
+    let first_exclusive = unsafe { first_exclusive.prod_unchecked_unwrap() };
     let (inclusive, exclusive) = filters.split_at(first_exclusive);
     (InclusiveFilter(inclusive), ExclusiveFilter(exclusive))
 }
@@ -139,7 +140,8 @@ impl<'a> TickConjunction<'a> {
     // right table, because we may call this with a table from a different conjunction.
     // TODO(perf): This needs to be cached.
     // O(n²) where n is sizeof archetype
-    pub fn within_tick(&self, archetype: &Archetype, table: &Table, row: TableRow) -> bool {
+    pub fn within_tick(&self, entity: UnsafeEntityCell) -> bool {
+        let archetype = entity.archetype();
         let (inclusive, exclusive) = filters(self.filters);
         let include_filter = inclusive.all_included(archetype.components());
         let exclude_filter = exclusive.any_excluded(archetype.components());
@@ -148,8 +150,8 @@ impl<'a> TickConjunction<'a> {
             return false;
         }
         let (changed, added) = tick_filters(self.filters);
-        let changed = changed.within_tick(table, row, self.last_run, self.this_run);
-        let added = added.within_tick(table, row, self.last_run, self.this_run);
+        let changed = changed.within_tick(entity, self.last_run, self.this_run);
+        let added = added.within_tick(entity, self.last_run, self.this_run);
 
         changed && added
     }
@@ -181,20 +183,20 @@ impl<'a> ExclusiveFilter<'a> {
     }
 }
 impl<'a> ChangedFilter<'a> {
-    fn within_tick(&self, table: &Table, row: TableRow, last_run: Tick, this_run: Tick) -> bool {
+    fn within_tick(&self, entity: UnsafeEntityCell, last_run: Tick, this_run: Tick) -> bool {
         self.0
             .iter()
-            .map(|f| unsafe { table.get_column(f.id()).release_unchecked_unwrap() })
-            .map(|c| unsafe { c.get_changed_ticks_unchecked(row) })
-            .all(|t| unsafe { t.get().read().is_newer_than(last_run, this_run) })
+            .map(|f| unsafe { entity.get_change_ticks_by_id(f.id()) })
+            .map(|t| unsafe { t.prod_unchecked_unwrap() })
+            .all(|t| t.last_changed_tick().is_newer_than(last_run, this_run))
     }
 }
 impl<'a> AddedFilter<'a> {
-    fn within_tick(&self, table: &Table, row: TableRow, last_run: Tick, this_run: Tick) -> bool {
+    fn within_tick(&self, entity: UnsafeEntityCell, last_run: Tick, this_run: Tick) -> bool {
         self.0
             .iter()
-            .map(|f| unsafe { table.get_column(f.id()).release_unchecked_unwrap() })
-            .map(|c| unsafe { c.get_added_ticks_unchecked(row) })
-            .all(|t| unsafe { t.get().read().is_newer_than(last_run, this_run) })
+            .map(|f| unsafe { entity.get_change_ticks_by_id(f.id()) })
+            .map(|t| unsafe { t.prod_unchecked_unwrap() })
+            .all(|t| t.added_tick().is_newer_than(last_run, this_run))
     }
 }
