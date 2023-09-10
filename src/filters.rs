@@ -1,13 +1,15 @@
+use std::collections::HashSet;
+
 use bevy_ecs::archetype::Archetype;
 use bevy_ecs::component::{ComponentId, Tick};
 use bevy_ecs::world::unsafe_world_cell::UnsafeEntityCell;
 use fixedbitset::FixedBitSet;
 
+use crate::ctor_dsl::{AndFilter, AndFilters, OrFilters};
 use crate::debug_unchecked::DebugUnchecked;
 use crate::fetches::Fetches;
-use crate::jagged_array::JaggedArray;
+use crate::jagged_array::{JaggedArray, JaggedArrayBuilder};
 
-// TODO(BUG): Must ensure correct sort order when creating.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Filters(JaggedArray<Filter>);
 
@@ -21,6 +23,8 @@ enum FilterKind {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Filter {
+    /// This is an optimized `enum` where the variant discriminant is stored in
+    /// the most significant two bits of `component`.
     component: u32,
 }
 
@@ -55,6 +59,16 @@ impl Filter {
         Filter { component }
     }
 }
+impl From<AndFilter> for Filter {
+    fn from(value: AndFilter) -> Self {
+        match value {
+            AndFilter::With(id) => Self::new(FilterKind::With, id),
+            AndFilter::Without(id) => Self::new(FilterKind::Without, id),
+            AndFilter::Changed(id) => Self::new(FilterKind::Changed, id),
+            AndFilter::Added(id) => Self::new(FilterKind::Added, id),
+        }
+    }
+}
 
 /// [`Filters`] are a list of "conjunction".
 pub struct Conjunction<'a> {
@@ -68,6 +82,31 @@ struct ChangedFilter<'a>(&'a [Filter]);
 struct AddedFilter<'a>(&'a [Filter]);
 
 impl Filters {
+    /// # Safety
+    /// - Filters within conjunctions must be sorted
+    /// - There is no duplicate inclusive filters within each single
+    ///   conjunction.
+    pub unsafe fn new_unchecked(OrFilters(dsl_value): OrFilters) -> Self {
+        let cell_count = dsl_value.iter().map(|x| x.0.len()).sum();
+        let mut builder = JaggedArrayBuilder::new_with_capacity(dsl_value.len(), cell_count);
+        for AndFilters(filters) in dsl_value.into_iter() {
+            builder.add_row(filters.into_iter().map(Filter::from));
+        }
+        Filters(builder.build())
+    }
+    pub fn new(OrFilters(dsl_value): OrFilters) -> Option<Self> {
+        let cell_count = dsl_value.iter().map(|x| x.0.len()).sum();
+        let mut builder = JaggedArrayBuilder::new_with_capacity(dsl_value.len(), cell_count);
+        for AndFilters(filters) in dsl_value.into_iter() {
+            let mut filters: Vec<_> = filters.into_iter().map(Filter::from).collect();
+            filters.sort_unstable();
+            if duplicates_in(&filters) {
+                return None;
+            }
+            builder.add_row(filters);
+        }
+        Some(Filters(builder.build()))
+    }
     pub fn conjunctions<'a>(
         &'a self,
         fetches: &'a Fetches,
@@ -83,6 +122,16 @@ impl Filters {
         let conjunction = move |filters| TickConjunction { filters, last_run, this_run };
         self.0.rows_iter().map(conjunction)
     }
+}
+impl TryFrom<OrFilters> for Filters {
+    type Error = ();
+    fn try_from(value: OrFilters) -> Result<Self, Self::Error> {
+        Self::new(value).ok_or(())
+    }
+}
+fn duplicates_in(filters: &[Filter]) -> bool {
+    let mut encountered = HashSet::with_capacity(filters.len());
+    filters.iter().any(|f| !encountered.insert(f.id()))
 }
 fn tick_filters(filters: &[Filter]) -> (ChangedFilter, AddedFilter) {
     // A Filter value that always fit at the very end of the inclusive filters range.
@@ -159,8 +208,6 @@ impl<'a> TickConjunction<'a> {
 // TODO(perf): Likely can avoid O(n²). If only `ComponedId`s were
 // ordered in `Archetype::components()`…
 impl<'a> InclusiveFilter<'a> {
-    // TODO(BUG): Doesn't work with repeated components. We need to ensure this
-    // in `Fetches` constructor.
     #[inline]
     pub fn all_included(self, ids: impl Iterator<Item = ComponentId>) -> bool {
         let mut found = FixedBitSet::with_capacity(self.0.len());

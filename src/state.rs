@@ -68,9 +68,7 @@ pub struct DynamicState {
     item_buffer: Box<[MaybeDynamicItem]>,
 }
 impl DynamicState {
-    // TODO(feat):
-    // - Query caching
-    // - mutal exclusion rules
+    // TODO(feat): Query caching
     pub fn in_world(query: &DynamicQuery, world: &mut World) -> Self {
         Self::new(query, world.archetypes())
     }

@@ -1,17 +1,7 @@
 use bevy_ecs::prelude::{Entity, World};
-use bevy_ecs::storage::TableRow;
-use bevy_reflect::Reflect;
+use bevy_reflect::{Reflect, TypeRegistry};
 
-use crate::fetches::{Fetch, Fetches};
-use crate::filters::Filters;
-use crate::DynamicState;
-use crate::OrFilters;
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Row {
-    pub(crate) entity: Entity,
-    pub(crate) row: TableRow,
-}
+use crate::{fetches::Fetches, filters::Filters, DynamicState, Fetch, OrFilters};
 
 #[derive(Default)]
 pub enum DynamicItem<'a> {
@@ -31,8 +21,10 @@ pub struct DynamicQuery {
 }
 
 impl DynamicQuery {
-    pub fn new(fetches: &[Fetch], filters: OrFilters) -> Self {
-        todo!()
+    pub fn new(fetches: Vec<Fetch>, filters: OrFilters, registry: &TypeRegistry) -> Option<Self> {
+        let fetches = Fetches::new(fetches, registry)?;
+        let filters = Filters::new(filters)?;
+        Some(DynamicQuery { fetches, filters })
     }
     pub fn state(&self, world: &mut World) -> DynamicState {
         todo!()

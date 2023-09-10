@@ -1,4 +1,4 @@
-pub use ctor_dsl::{AndFilter, AndFilters, OrFilters};
+pub use ctor_dsl::{AndFilter, AndFilters, Fetch, OrFilters};
 pub use dynamic_query::{DynamicItem, DynamicQuery};
 pub use state::DynamicState;
 

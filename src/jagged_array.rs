@@ -1,12 +1,10 @@
-//! A variable length matrix optimized for read-only
-//! rows and statically known row count.
+//! A variable length matrix optimized for read-only rows.
 
-use std::{mem::size_of, ops::RangeBounds};
+use std::ops::RangeBounds;
 
 /// A variable length matrix optimized for read-only rows.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct JaggedArray<V> {
-    // TODO(perf): store the row indices inline, preventing cache misses when looking up several rows.
     ends: Box<[u32]>,
     data: Box<[V]>,
 }
@@ -23,35 +21,6 @@ impl<V> JaggedArray<V> {
     /// How many rows this `JaggedArray` has.
     pub const fn height(&self) -> usize {
         self.ends.len() + 1
-    }
-    /// Create a [`JaggedArray`] of ` + 1` rows, values of `ends` are the
-    /// end indicies (exclusive) of each row in `data`.
-    pub fn new(ends: Box<[u32]>, data: Box<[V]>) -> Option<Self> {
-        assert!(size_of::<usize>() >= size_of::<u32>());
-
-        let mut previous_end = 0;
-        let last_end = data.len() as u32;
-        for end in ends.iter() {
-            if *end > last_end {
-                return None;
-            }
-            if *end < previous_end {
-                return None;
-            }
-            previous_end = *end;
-        }
-        Some(Self { ends, data })
-    }
-    /// Get slice to row at given `index`.
-    #[inline]
-    pub fn row(&self, index: usize) -> &[V] {
-        assert!(index <= self.ends.len());
-        // TODO(perf): verify generated code elides bound checks.
-        let get_end = |end: &u32| *end as usize;
-
-        let start = index.checked_sub(1).map_or(0, |i| self.ends[i]) as usize;
-        let end = self.ends.get(index).map_or(self.data.len(), get_end);
-        &self.data[start..end]
     }
     /// Same as `row`, but for a range of rows instead of individual rows.
     pub fn rows(&self, range: impl RangeBounds<usize>) -> &[V] {
@@ -72,12 +41,6 @@ impl<V> JaggedArray<V> {
         let start = start.checked_sub(1).map_or(0, |i| self.ends[i]) as usize;
         let end = self.ends.get(end).map_or(self.data.len(), get_end);
         &self.data[start..end]
-    }
-    /// Get `V` at exact `direct_index` ignoring row sizes,
-    /// acts as if the whole array was a single row.
-    #[inline]
-    pub fn get(&self, direct_index: usize) -> Option<&V> {
-        self.data.get(direct_index)
     }
     pub fn rows_iter(&self) -> JaggedArrayRows<V> {
         JaggedArrayRows { array: self, row: 0 }
@@ -100,5 +63,31 @@ impl<'j, V> Iterator for JaggedArrayRows<'j, V> {
         let start = self.row.checked_sub(1).map_or(0, |i| ends[i]) as usize;
         let end = ends.get(self.row).map_or(self.array.data.len(), get_end);
         self.array.data.get(start..end)
+    }
+}
+pub struct JaggedArrayBuilder<V> {
+    last_end: Option<u32>,
+    ends: Vec<u32>,
+    data: Vec<V>,
+}
+impl<V> JaggedArrayBuilder<V> {
+    pub fn new_with_capacity(row_count: usize, data_len: usize) -> Self {
+        JaggedArrayBuilder {
+            last_end: None,
+            ends: Vec::with_capacity(row_count),
+            data: Vec::with_capacity(data_len),
+        }
+    }
+    pub fn add_elem(&mut self, elem: V) {
+        self.data.push(elem);
+    }
+    pub fn add_row(&mut self, row: impl IntoIterator<Item = V>) {
+        self.data.extend(row);
+        if let Some(last_end) = self.last_end.replace(self.data.len() as u32) {
+            self.ends.push(last_end);
+        }
+    }
+    pub fn build(self) -> JaggedArray<V> {
+        JaggedArray { ends: self.ends.into(), data: self.data.into() }
     }
 }

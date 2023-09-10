@@ -1,27 +1,14 @@
-use std::{fmt, iter, slice};
+use std::{collections::HashSet, fmt, iter, slice};
 
-use bevy_ecs::component::ComponentId;
+use bevy_ecs::component::{ComponentId, ComponentInfo};
 use bevy_ecs::world::unsafe_world_cell::UnsafeEntityCell;
-use bevy_reflect::ReflectFromPtr;
+use bevy_reflect::{ReflectFromPtr, TypeRegistry};
 use fixedbitset::FixedBitSet;
 
+use crate::ctor_dsl::Fetch;
 use crate::debug_unchecked::DebugUnchecked;
 use crate::dynamic_query::DynamicItem;
-use crate::jagged_array::{JaggedArray, JaggedArrayRows};
-
-pub enum Fetch {
-    Read(ComponentId),
-    Mut(ComponentId),
-    OptionRead(ComponentId),
-    OptionMut(ComponentId),
-    Entity,
-}
-impl Fetch {
-    const READ_IDX: usize = 0;
-    const MUT_IDX: usize = 1;
-    const OPTION_READ_IDX: usize = 2;
-    const OPTION_MUT_IDX: usize = 3;
-}
+use crate::jagged_array::{JaggedArray, JaggedArrayBuilder, JaggedArrayRows};
 
 #[derive(Clone)]
 pub struct FetchComponent {
@@ -44,11 +31,42 @@ pub struct Fetches {
     pub(crate) components: JaggedArray<FetchComponent>,
 }
 impl Fetches {
+    pub fn new(mut fetches: Vec<Fetch>, registry: &TypeRegistry) -> Option<Self> {
+        let get_registration = |info: &ComponentInfo| {
+            info.type_id().map_or_else(
+                || registry.get_with_name(info.name()),
+                |id| registry.get(id),
+            )
+        };
+        fetches.sort_unstable();
+        let has_entity = fetches.last() == Some(&Fetch::Entity);
+        if has_entity {
+            fetches.pop();
+        }
+        let mut builder = JaggedArrayBuilder::new_with_capacity(4, fetches.len());
+        let mut last_idx = 0;
+        for fetch in fetches.into_iter() {
+            let index = fetch.discriminant_index();
+            if last_idx != index {
+                builder.add_row(iter::empty());
+            }
+            last_idx = index;
+
+            let info = fetch.info();
+            let registration = get_registration(info)?;
+            let from_ptr = registration.data::<ReflectFromPtr>()?.clone();
+            builder.add_elem(FetchComponent { id: info.id(), from_ptr });
+        }
+        let components = builder.build();
+
+        if duplicates_in(components.rows(..)) {
+            return None;
+        }
+        Some(Fetches { has_entity, components })
+    }
     pub const fn len(&self) -> usize {
         self.components.len() + (self.has_entity as u8 as usize)
     }
-    // TODO(BUG): Doesn't work with repeated components. We need to ensure this
-    // in `Fetches` constructor.
     #[inline]
     pub fn all_included(&self, ids: impl Iterator<Item = ComponentId>) -> bool {
         let comps = self.components.rows(Fetch::READ_IDX..=Fetch::MUT_IDX);
@@ -76,8 +94,13 @@ impl Fetches {
     }
 }
 
-type FetchRowRet<'s, F> = iter::Map<iter::Cloned<slice::Iter<'s, FetchComponent>>, F>;
+fn duplicates_in(fetches: &[FetchComponent]) -> bool {
+    let mut encountered = HashSet::with_capacity(fetches.len());
+    fetches.iter().any(|fetch| !encountered.insert(fetch.id))
+}
 
+// TODO(clean): eyebleed
+type FetchRowRet<'s, F> = iter::Map<iter::Cloned<slice::Iter<'s, FetchComponent>>, F>;
 type FetchRows<'s, F> = iter::FlatMap<
     iter::Enumerate<JaggedArrayRows<'s, FetchComponent>>,
     FetchRowRet<'s, F>,
