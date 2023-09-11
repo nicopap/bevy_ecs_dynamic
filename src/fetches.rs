@@ -57,6 +57,12 @@ impl Fetches {
             let from_ptr = registration.data::<ReflectFromPtr>()?.clone();
             builder.add_elem(FetchComponent { id: info.id(), from_ptr });
         }
+        // SAFETY:
+        // - last_idx = index = fetch.discriminant_index()
+        // - fetch.discriminant_index() ∈ {0,1,2,3,4}
+        // - We panic when fetch.discriminant_index() = 4 because of fetch.info()
+        unsafe { assert_invariant!(last_idx <= 3) };
+
         let components = builder.build();
 
         if duplicates_in(components.rows(..)) {
@@ -91,6 +97,15 @@ impl Fetches {
         entity: UnsafeEntityCell<'w>,
     ) -> FetchesIter<'s, 'w, impl FnMut(FetchComponent) -> (usize, FetchComponent)> {
         unsafe { FetchesIter::new(self.has_entity, &self.components, entity) }
+    }
+    /// # Safety
+    /// - `table` must contains the non-option components of this [`Fetches`].
+    /// - You must have read access to the mut/read components in this `Fetches`.
+    pub unsafe fn iter_read_only<'s, 'w>(
+        &'s self,
+        entity: UnsafeEntityCell<'w>,
+    ) -> ReadOnlyFetchesIter<'s, 'w, impl FnMut(FetchComponent) -> (usize, FetchComponent)> {
+        unsafe { ReadOnlyFetchesIter::new(self.has_entity, &self.components, entity) }
     }
 }
 
@@ -179,6 +194,66 @@ impl<'s, 'w, F: FnMut(FetchComponent) -> (usize, FetchComponent)> Iterator
             }
             // TODO(perf): check this is elided
             _ => unreachable!(),
+        }
+    }
+}
+pub struct ReadOnlyFetchesIter<'s, 'w, F: FnMut(FetchComponent) -> (usize, FetchComponent)> {
+    has_entity: bool,
+    fetches: FetchRows<'s, F>,
+    entity: UnsafeEntityCell<'w>,
+}
+impl<'s, 'w> ReadOnlyFetchesIter<'s, 'w, fn(FetchComponent) -> (usize, FetchComponent)> {
+    /// # Safety
+    /// - `table` must contains the non-option components of this [`Fetches`].
+    /// - You must have mut/read access to the mut/read components in this `Fetches`.
+    unsafe fn new(
+        has_entity: bool,
+        fetches: &'s JaggedArray<FetchComponent>,
+        entity: UnsafeEntityCell<'w>,
+    ) -> ReadOnlyFetchesIter<'s, 'w, impl FnMut(FetchComponent) -> (usize, FetchComponent)> {
+        ReadOnlyFetchesIter {
+            has_entity,
+            fetches: fetches.rows_iter().enumerate().flat_map(mapmap),
+            entity,
+        }
+    }
+}
+impl<'s, 'w, F: FnMut(FetchComponent) -> (usize, FetchComponent)> Iterator
+    for ReadOnlyFetchesIter<'s, 'w, F>
+{
+    type Item = DynamicItem<'w>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.has_entity {
+            self.has_entity = false;
+            return Some(DynamicItem::Entity(self.entity.id()));
+        }
+        let (i, comp) = self.fetches.next()?;
+        match i {
+            Fetch::MUT_IDX | Fetch::READ_IDX => {
+                // SAFETY:
+                // - (1): `Self::new`'s invariant ensures this is always Some.
+                // - (2): By construction, the `ReflectFromPtr` is always the one for what we
+                //   are fetching
+                let ptr = unsafe { self.entity.get_by_id(comp.id).prod_unchecked_unwrap() };
+                let reflect = unsafe { comp.from_ptr.as_reflect_ptr(ptr) };
+
+                Some(DynamicItem::Read(reflect))
+            }
+            Fetch::OPTION_MUT_IDX | Fetch::OPTION_READ_IDX => {
+                // SAFETY: Same as point (3) of above
+                let ptr = unsafe { self.entity.get_by_id(comp.id) };
+                let reflect = unsafe { ptr.map(|p| comp.from_ptr.as_reflect_ptr(p)) };
+
+                Some(DynamicItem::OptionRead(reflect))
+            }
+            _ => {
+                // SAFETY: The `fetches` iterator comes from `Fetches.components`,
+                // which is built in `Fetches::new`, which builds a JaggedArray with
+                // at most 4 rows due to reasons evoked in the assert_invariant!
+                // in `Fetches::new`
+                unsafe { assert_invariant!(false) };
+                None
+            }
         }
     }
 }

@@ -1,52 +1,38 @@
-use std::mem::{transmute, MaybeUninit};
+use std::iter;
 
 use bevy_ecs::archetype::{Archetype, ArchetypeId, Archetypes};
-use bevy_ecs::world::unsafe_world_cell::UnsafeEntityCell;
-use bevy_ecs::world::{unsafe_world_cell::UnsafeWorldCell, World};
-use bevy_ecs::{component::Tick, prelude::Entity};
-use fixedbitset::FixedBitSet;
+use bevy_ecs::world::unsafe_world_cell::{UnsafeEntityCell, UnsafeWorldCell};
+use bevy_ecs::{component::Tick, prelude::Entity, world::World};
+use fixedbitset::{FixedBitSet, Ones};
 use thiserror::Error;
 
 use crate::dynamic_query::{DynamicItem, DynamicQuery};
 use crate::iter::{DynamicQueryIter, RoDynamicQueryIter};
+use crate::maybe_item::{assume_init_mut, MaybeDynamicItem};
 use crate::{fetches::Fetches, filters::Filters};
 
-#[derive(Debug)]
-struct MaybeDynamicItem(MaybeUninit<DynamicItem<'static>>);
-impl Clone for MaybeDynamicItem {
-    fn clone(&self) -> Self {
-        Self::uninit()
-    }
+fn usize_to_archetype_id(usize: usize) -> ArchetypeId {
+    let u32 = usize as u32;
+    unsafe { std::mem::transmute(u32) }
 }
-impl MaybeDynamicItem {
-    fn uninit() -> Self {
-        MaybeDynamicItem(MaybeUninit::uninit())
-    }
-    /// Note that you must never call `assume_init[_mut]` with a lifetime outliving `'w`.
-    fn set<'w>(&mut self, value: DynamicItem<'w>) {
-        // SAFETY: This is safe as long as we don't dereference the stored value
-        // with an eroneous lifetime. Which is guarenteed by the other methods
-        // in this `impl` block.
-        let static_value = unsafe { transmute::<DynamicItem<'w>, DynamicItem<'static>>(value) };
-
-        self.0.write(static_value);
-    }
-}
-
-/// SAFETY:
-/// - All items must outlive `'w`.
-/// - All items must be initialized.
-unsafe fn assume_init_mut<'w>(items: &mut [MaybeDynamicItem]) -> &mut [DynamicItem<'w>] {
-    // SAFETY: I really don't know
-    unsafe { transmute(items) }
-}
-
 fn archetype_id_to_u32(id: ArchetypeId) -> u32 {
     // SAFETY: ArchetypeId is repr(transparent) u32
     unsafe { std::mem::transmute(id) }
 }
 #[derive(Default, Clone, Debug)]
-struct MatchedArchetypes(FixedBitSet);
+pub(crate) struct MatchedArchetypes(FixedBitSet);
+
+#[derive(Clone, Copy, Debug)]
+pub struct Ticks {
+    pub last_run: Tick,
+    pub this_run: Tick,
+}
+impl Ticks {
+    pub fn new(last_run: Tick, this_run: Tick) -> Self {
+        Self { last_run, this_run }
+    }
+}
+
 impl MatchedArchetypes {
     fn add_archetype(&mut self, id: ArchetypeId) {
         let id = archetype_id_to_u32(id);
@@ -58,13 +44,17 @@ impl MatchedArchetypes {
         let id = archetype_id_to_u32(entity_archetype);
         self.0.contains(id as usize)
     }
+
+    pub(crate) fn iter(&self) -> iter::Map<Ones, fn(usize) -> ArchetypeId> {
+        self.0.ones().map(usize_to_archetype_id)
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct DynamicState {
-    fetches: Fetches,
-    filters: Filters,
-    archetype_ids: MatchedArchetypes,
+    pub(crate) fetches: Fetches,
+    pub(crate) filters: Filters,
+    pub(crate) archetype_ids: MatchedArchetypes,
     item_buffer: Box<[MaybeDynamicItem]>,
 }
 impl DynamicState {
@@ -111,8 +101,11 @@ impl DynamicState {
     /// Overwrites `self.item_buffer` with the `fetch` items from provided
     /// table row and returns the buffer as-is.
     fn buffer_row<'s, 'w>(&'s mut self, entity: UnsafeEntityCell<'w>) -> &'s mut [DynamicItem<'w>] {
-        assert_eq!(self.fetches.len(), self.item_buffer.len());
+        // SAFETY: by construction item_buffer is same length as self.fetches
+        unsafe { assert_invariant!(self.fetches.len() == self.item_buffer.len()) };
 
+        // We know fetches.len() equals self.item_buffer, because we used that
+        // value to create item_buffer
         let iter = unsafe { self.fetches.iter(entity) };
         self.item_buffer.iter_mut().zip(iter).for_each(|(i, v)| {
             i.set(v);
@@ -150,8 +143,7 @@ impl DynamicState {
         &'s mut self,
         world: UnsafeWorldCell<'w>,
         entity: Entity,
-        last_run: Tick,
-        this_run: Tick,
+        ticks: Ticks,
     ) -> Result<&'s mut [DynamicItem<'w>], DynamicQueryError> {
         let dangling_entity = DynamicQueryError::DanglingEntity(entity);
         let entity = world.get_entity(entity).ok_or(dangling_entity)?;
@@ -160,7 +152,7 @@ impl DynamicState {
             return Err(DynamicQueryError::InvalidEntity(entity.id()));
         }
 
-        let mut conjunctions = self.filters.tick_conjunctions(last_run, this_run);
+        let mut conjunctions = self.filters.tick_conjunctions(ticks);
         if !conjunctions.any(|c| c.within_tick(entity)) {
             return Err(DynamicQueryError::NotInTick(entity.id()));
         }
@@ -171,27 +163,34 @@ impl DynamicState {
         &'s mut self,
         world: &'w World,
         entity: Entity,
-        last_run: Tick,
+        ticks: Ticks,
     ) -> Result<&'s [DynamicItem<'w>], DynamicQueryError> {
-        let this_run = world.last_change_tick();
         let world = world.as_unsafe_world_cell_readonly();
-        self.get_unchecked_manual(world, entity, last_run, this_run)
-            .map(|x| &*x)
+        self.get_unchecked_manual(world, entity, ticks).map(|x| &*x)
     }
     pub fn get_mut<'w, 's>(
         &'s mut self,
         world: &'w mut World,
         entity: Entity,
+        ticks: Ticks,
     ) -> Result<&'s mut [DynamicItem<'w>], DynamicQueryError> {
-        let last_run = world.last_change_tick();
-        let this_run = world.change_tick();
         let world = world.as_unsafe_world_cell();
-        self.get_unchecked_manual(world, entity, last_run, this_run)
+        self.get_unchecked_manual(world, entity, ticks)
     }
-    pub fn iter<'w, 's>(&'s mut self, world: &'w World) -> RoDynamicQueryIter<'s, 'w> {
-        todo!()
+    pub fn iter<'w, 's>(
+        &'s mut self,
+        world: &'w World,
+        ticks: Ticks,
+    ) -> RoDynamicQueryIter<'w, 's> {
+        let world = world.as_unsafe_world_cell_readonly();
+        RoDynamicQueryIter::new(world, self, ticks)
     }
-    pub fn iter_mut<'w, 's>(&'s mut self, world: &'w mut World) -> DynamicQueryIter<'s, 'w> {
-        todo!()
+    pub fn iter_mut<'w, 's>(
+        &'s mut self,
+        world: &'w mut World,
+        ticks: Ticks,
+    ) -> DynamicQueryIter<'w, 's> {
+        let world = world.as_unsafe_world_cell();
+        DynamicQueryIter::new(world, self, ticks)
     }
 }

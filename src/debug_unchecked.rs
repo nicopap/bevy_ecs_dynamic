@@ -1,4 +1,6 @@
 pub(crate) trait DebugUnchecked<T> {
+    /// # Safety
+    /// This is undefined behavior if `Option::None`.
     unsafe fn prod_unchecked_unwrap(self) -> T;
 }
 impl<T> DebugUnchecked<T> for Option<T> {

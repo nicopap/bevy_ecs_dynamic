@@ -3,10 +3,7 @@ use bevy_reflect::{Reflect, TypeRegistry};
 
 use crate::{fetches::Fetches, filters::Filters, DynamicState, Fetch, OrFilters};
 
-#[derive(Default)]
 pub enum DynamicItem<'a> {
-    #[default]
-    Uninitialized,
     Entity(Entity),
     Read(&'a dyn Reflect),
     Mut(&'a mut dyn Reflect),
@@ -27,6 +24,6 @@ impl DynamicQuery {
         Some(DynamicQuery { fetches, filters })
     }
     pub fn state(&self, world: &mut World) -> DynamicState {
-        todo!()
+        DynamicState::in_world(self, world)
     }
 }

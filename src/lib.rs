@@ -1,6 +1,16 @@
 pub use ctor_dsl::{AndFilter, AndFilters, Fetch, OrFilters};
 pub use dynamic_query::{DynamicItem, DynamicQuery};
-pub use state::DynamicState;
+pub use state::{DynamicState, Ticks};
+
+/// Panic in debug mode, assume `true` in release mode.
+macro_rules! assert_invariant {
+    ($invariant:expr) => {{
+        debug_assert!($invariant);
+        if !$invariant {
+            std::hint::unreachable_unchecked();
+        }
+    }};
+}
 
 mod ctor_dsl;
 mod debug_unchecked;
@@ -9,4 +19,5 @@ mod fetches;
 mod filters;
 mod iter;
 mod jagged_array;
+mod maybe_item;
 mod state;

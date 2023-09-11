@@ -9,6 +9,7 @@ use crate::ctor_dsl::{AndFilter, AndFilters, OrFilters};
 use crate::debug_unchecked::DebugUnchecked;
 use crate::fetches::Fetches;
 use crate::jagged_array::{JaggedArray, JaggedArrayBuilder};
+use crate::state::Ticks;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Filters(JaggedArray<Filter>);
@@ -73,6 +74,7 @@ impl From<AndFilter> for Filter {
 /// [`Filters`] are a list of "conjunction".
 pub struct Conjunction<'a> {
     filters: &'a [Filter],
+    // TODO(perf): I think this can be safely removed?
     fetches: &'a Fetches,
 }
 
@@ -114,12 +116,8 @@ impl Filters {
         let conjunction = |filters| Conjunction { filters, fetches };
         self.0.rows_iter().map(conjunction)
     }
-    pub fn tick_conjunctions(
-        &self,
-        last_run: Tick,
-        this_run: Tick,
-    ) -> impl Iterator<Item = TickConjunction> + '_ {
-        let conjunction = move |filters| TickConjunction { filters, last_run, this_run };
+    pub fn tick_conjunctions(&self, ticks: Ticks) -> impl Iterator<Item = TickConjunction> + '_ {
+        let conjunction = move |filters| TickConjunction { filters, ticks };
         self.0.rows_iter().map(conjunction)
     }
 }
@@ -134,7 +132,7 @@ fn duplicates_in(filters: &[Filter]) -> bool {
     filters.iter().any(|f| !encountered.insert(f.id()))
 }
 fn tick_filters(filters: &[Filter]) -> (ChangedFilter, AddedFilter) {
-    // A Filter value that always fit at the very end of the inclusive filters range.
+    // A Filter value that always fit at the very end of the previous `FilterKind` filters range.
     let mut last_with = Filter::new(FilterKind::Changed, ComponentId::new(0));
     let mut last_changed = Filter::new(FilterKind::Added, ComponentId::new(0));
     let mut last_added = Filter::new(FilterKind::Without, ComponentId::new(0));
@@ -181,14 +179,13 @@ impl<'a> Conjunction<'a> {
 /// [`Filters`] are a list of "conjunction"
 pub struct TickConjunction<'a> {
     filters: &'a [Filter],
-    last_run: Tick,
-    this_run: Tick,
+    ticks: Ticks,
 }
 impl<'a> TickConjunction<'a> {
     // NOTE: unlike `fetches::FetchesIter::next`, we can't assume we are on the
     // right table, because we may call this with a table from a different conjunction.
     // TODO(perf): This needs to be cached.
-    // O(n²) where n is sizeof archetype
+    // O(n * c) where n is sizeof archetype, c how many components in conjunciton
     pub fn within_tick(&self, entity: UnsafeEntityCell) -> bool {
         let archetype = entity.archetype();
         let (inclusive, exclusive) = filters(self.filters);
@@ -198,9 +195,10 @@ impl<'a> TickConjunction<'a> {
         if !include_filter || exclude_filter {
             return false;
         }
+        let Ticks { last_run, this_run } = self.ticks;
         let (changed, added) = tick_filters(self.filters);
-        let changed = changed.within_tick(entity, self.last_run, self.this_run);
-        let added = added.within_tick(entity, self.last_run, self.this_run);
+        let changed = changed.within_tick(entity, last_run, this_run);
+        let added = added.within_tick(entity, last_run, this_run);
 
         changed && added
     }
