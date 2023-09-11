@@ -1,4 +1,14 @@
-use bevy_ecs::component::{ComponentId, ComponentInfo};
+use bevy_ecs::component::{ComponentId, ComponentInfo, Components};
+use bevy_ecs::prelude::Query;
+use bevy_ecs::query::{ReadOnlyWorldQuery, WorldQuery};
+use bevy_reflect::TypeRegistry;
+
+use crate::DynamicQuery;
+use traits::{DFetches, DOr};
+
+pub use traits::DQuery;
+
+mod traits;
 
 #[derive(Clone, Copy, Debug)]
 pub enum AndFilter {
@@ -83,5 +93,15 @@ impl PartialOrd for Fetch<'_> {
 impl Ord for Fetch<'_> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.partial_cmp(other).unwrap()
+    }
+}
+
+impl<Q, F> DQuery for Query<'_, '_, Q, F>
+where
+    Q: WorldQuery + DFetches,
+    F: ReadOnlyWorldQuery + DOr,
+{
+    fn dynamic(components: &Components, registry: &TypeRegistry) -> DynamicQuery {
+        DynamicQuery::new(Q::fetches(components), F::or(components), registry).unwrap()
     }
 }

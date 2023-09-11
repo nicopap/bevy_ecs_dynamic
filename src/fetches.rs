@@ -5,7 +5,7 @@ use bevy_ecs::world::unsafe_world_cell::UnsafeEntityCell;
 use bevy_reflect::{ReflectFromPtr, TypeRegistry};
 use fixedbitset::FixedBitSet;
 
-use crate::ctor_dsl::Fetch;
+use crate::builder::Fetch;
 use crate::debug_unchecked::DebugUnchecked;
 use crate::dynamic_query::DynamicItem;
 use crate::jagged_array::{JaggedArray, JaggedArrayBuilder, JaggedArrayRows};

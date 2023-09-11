@@ -1,4 +1,4 @@
-pub use ctor_dsl::{AndFilter, AndFilters, Fetch, OrFilters};
+pub use builder::{AndFilter, AndFilters, DQuery, Fetch, OrFilters};
 pub use dynamic_query::{DynamicItem, DynamicQuery};
 pub use state::{DynamicState, Ticks};
 
@@ -12,7 +12,7 @@ macro_rules! assert_invariant {
     }};
 }
 
-mod ctor_dsl;
+mod builder;
 mod debug_unchecked;
 mod dynamic_query;
 mod fetches;
@@ -21,3 +21,6 @@ mod iter;
 mod jagged_array;
 mod maybe_item;
 mod state;
+
+#[cfg(test)]
+mod tests;

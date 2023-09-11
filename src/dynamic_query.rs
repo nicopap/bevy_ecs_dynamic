@@ -1,7 +1,8 @@
+use bevy_ecs::component::Components;
 use bevy_ecs::prelude::{Entity, World};
 use bevy_reflect::{Reflect, TypeRegistry};
 
-use crate::{fetches::Fetches, filters::Filters, DynamicState, Fetch, OrFilters};
+use crate::{fetches::Fetches, filters::Filters, DQuery, DynamicState, Fetch, OrFilters};
 
 pub enum DynamicItem<'a> {
     Entity(Entity),
@@ -25,5 +26,8 @@ impl DynamicQuery {
     }
     pub fn state(&self, world: &mut World) -> DynamicState {
         DynamicState::in_world(self, world)
+    }
+    pub fn from_query<Q: DQuery>(cs: &Components, registry: &TypeRegistry) -> Self {
+        Q::dynamic(cs, registry)
     }
 }

@@ -5,7 +5,7 @@ use bevy_ecs::component::{ComponentId, Tick};
 use bevy_ecs::world::unsafe_world_cell::UnsafeEntityCell;
 use fixedbitset::FixedBitSet;
 
-use crate::ctor_dsl::{AndFilter, AndFilters, OrFilters};
+use crate::builder::{AndFilter, AndFilters, OrFilters};
 use crate::debug_unchecked::DebugUnchecked;
 use crate::fetches::Fetches;
 use crate::jagged_array::{JaggedArray, JaggedArrayBuilder};

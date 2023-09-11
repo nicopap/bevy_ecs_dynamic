@@ -9,3 +9,5 @@ We need:
 - how we handle archetype updates
 - how we handle optional components (`Table` and `SparseSet`)
 - how we handle Or
+- Iteration
+- Get: present/not present
