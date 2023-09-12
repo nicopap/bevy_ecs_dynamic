@@ -1,4 +1,4 @@
 check:
 	cargo clippy
 run:
-	cargo run --bin wry_demo
+	RUST_BACKTRACE=1 RUST_LOG=trace cargo test

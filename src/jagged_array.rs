@@ -34,8 +34,8 @@ impl<V> JaggedArray<V> {
             std::ops::Bound::Excluded(end) => *end,
             std::ops::Bound::Unbounded => self.height(),
         };
-        assert!(end <= self.ends.len() + 1);
-        assert!(start <= end);
+        assert!(end <= self.height(), "{}>{}+1", end, self.ends.len());
+        assert!(start <= end, "{}>{}", start, end);
 
         let get_end = |end: &u32| *end as usize;
         let start = start.checked_sub(1).map_or(0, |i| self.ends[i]) as usize;
@@ -55,14 +55,11 @@ impl<'j, V> Iterator for JaggedArrayRows<'j, V> {
     type Item = &'j [V];
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.row >= self.array.ends.len() {
+        if self.row >= self.array.height() {
             return None;
         }
-        let get_end = |end: &u32| *end as usize;
-        let ends = &self.array.ends;
-        let start = self.row.checked_sub(1).map_or(0, |i| ends[i]) as usize;
-        let end = ends.get(self.row).map_or(self.array.data.len(), get_end);
-        self.array.data.get(start..end)
+        self.row += 1;
+        Some(self.array.rows(self.row - 1..self.row))
     }
 }
 pub struct JaggedArrayBuilder<V> {

@@ -8,8 +8,11 @@ license = "MIT OR Apache-2.0"
 bevy_ecs = { version = "0.11.2", default-features = false, features = ["bevy_reflect"] }
 bevy_reflect = "0.11.2"
 fixedbitset = "0.4.2"
+tracing = "0.1.37"
 thiserror = "1.0.48"
 
 [dev-dependencies]
 cuicui_dsl = "0.9.0"
 bevy = { version = "0.11.2", default-features = false }
+test-log = { version = "0.2.12", default-features = false, features = ["trace"] }
+tracing-subscriber = "0.3.17"

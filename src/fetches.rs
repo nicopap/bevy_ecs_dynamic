@@ -1,11 +1,11 @@
 use std::{collections::HashSet, fmt, iter, slice};
 
-use bevy_ecs::component::{ComponentId, ComponentInfo};
-use bevy_ecs::world::unsafe_world_cell::UnsafeEntityCell;
-use bevy_reflect::{ReflectFromPtr, TypeRegistry};
+use bevy_ecs::{component::ComponentId, world::unsafe_world_cell::UnsafeEntityCell};
+use bevy_reflect::ReflectFromPtr;
 use fixedbitset::FixedBitSet;
+use tracing::trace;
 
-use crate::builder::Fetch;
+use crate::builder::{Fetch, FetchData};
 use crate::debug_unchecked::DebugUnchecked;
 use crate::dynamic_query::DynamicItem;
 use crate::jagged_array::{JaggedArray, JaggedArrayBuilder, JaggedArrayRows};
@@ -31,31 +31,28 @@ pub struct Fetches {
     pub(crate) components: JaggedArray<FetchComponent>,
 }
 impl Fetches {
-    pub fn new(mut fetches: Vec<Fetch>, registry: &TypeRegistry) -> Option<Self> {
-        let get_registration = |info: &ComponentInfo| {
-            info.type_id().map_or_else(
-                || registry.get_with_name(info.name()),
-                |id| registry.get(id),
-            )
-        };
+    pub fn new(mut fetches: Vec<Fetch>) -> Option<Self> {
         fetches.sort_unstable();
         let has_entity = fetches.last() == Some(&Fetch::Entity);
         if has_entity {
+            trace!("Fetch has entity");
             fetches.pop();
         }
         let mut builder = JaggedArrayBuilder::new_with_capacity(4, fetches.len());
         let mut last_idx = 0;
         for fetch in fetches.into_iter() {
             let index = fetch.discriminant_index();
-            if last_idx != index {
+            for _ in last_idx..index {
                 builder.add_row(iter::empty());
             }
             last_idx = index;
 
-            let info = fetch.info();
-            let registration = get_registration(info)?;
-            let from_ptr = registration.data::<ReflectFromPtr>()?.clone();
-            builder.add_elem(FetchComponent { id: info.id(), from_ptr });
+            let FetchData { id, from_ptr } = fetch.data().clone();
+            trace!("Fetch has component ID {id:?}");
+            builder.add_elem(FetchComponent { id, from_ptr });
+        }
+        for _ in last_idx..3 {
+            builder.add_row(iter::empty());
         }
         // SAFETY:
         // - last_idx = index = fetch.discriminant_index()
@@ -83,6 +80,7 @@ impl Fetches {
         // ordered in `Archetype::components()`…
         for id in ids {
             if let Some(idx) = comps.iter().position(|x| x.id == id) {
+                trace!("all_included: found {id:?} in fetches");
                 found.set(idx, true);
             }
         }

@@ -1,4 +1,4 @@
-pub use builder::{AndFilter, AndFilters, DQuery, Fetch, OrFilters};
+pub use builder::{AndFilter, AndFilters, DQuery, DynamicQueryBuilder, Fetch, OrFilters};
 pub use dynamic_query::{DynamicItem, DynamicQuery};
 pub use state::{DynamicState, Ticks};
 

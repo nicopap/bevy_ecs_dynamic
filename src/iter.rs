@@ -54,13 +54,13 @@ impl<'w, 's> RoDynamicQueryIter<'w, 's> {
             let entity = self.world.get_entity(first.entity());
             let entity = unsafe { entity.prod_unchecked_unwrap() };
 
-            let mut conjunctions = self.filter.tick_conjunctions(self.ticks);
-            if conjunctions.any(|c| c.within_tick(entity)) {
+            let mut conjunctions = self.filter.conjunctions();
+            if conjunctions.any(|c| c.within_tick(self.ticks, entity)) {
                 return Some(entity);
             }
         }
     }
-    pub fn new(world: UnsafeWorldCell<'w>, state: &'s DynamicState, ticks: Ticks) -> Self {
+    pub fn new(world: UnsafeWorldCell<'w>, state: &'s DynamicState) -> Self {
         let mut this = Self {
             ids: state.archetype_ids.iter(),
             filter: &state.filters,
@@ -68,7 +68,10 @@ impl<'w, 's> RoDynamicQueryIter<'w, 's> {
             entities: &[][..],
             buffer: None,
             world,
-            ticks,
+            ticks: Ticks {
+                last_run: world.last_change_tick(),
+                this_run: world.change_tick(),
+            },
         };
         if let Some(next_entity) = this.next_entity() {
             this.buffer = Some(fetch_buffer_ro(this.fetch, next_entity));
@@ -92,7 +95,7 @@ impl<'w, 's> Iterator for RoDynamicQueryIter<'w, 's> {
 
 pub struct DynamicQueryIter<'w, 's>(RoDynamicQueryIter<'w, 's>);
 impl<'w, 's> DynamicQueryIter<'w, 's> {
-    pub fn new(world: UnsafeWorldCell<'w>, state: &'s DynamicState, ticks: Ticks) -> Self {
+    pub fn new(world: UnsafeWorldCell<'w>, state: &'s DynamicState) -> Self {
         let mut this = RoDynamicQueryIter {
             ids: state.archetype_ids.iter(),
             filter: &state.filters,
@@ -100,7 +103,10 @@ impl<'w, 's> DynamicQueryIter<'w, 's> {
             entities: &[][..],
             buffer: None,
             world,
-            ticks,
+            ticks: Ticks {
+                last_run: world.last_change_tick(),
+                this_run: world.change_tick(),
+            },
         };
         if let Some(next_entity) = this.next_entity() {
             this.buffer = Some(fetch_buffer(this.fetch, next_entity));

@@ -5,6 +5,7 @@ use bevy_ecs::world::unsafe_world_cell::{UnsafeEntityCell, UnsafeWorldCell};
 use bevy_ecs::{component::Tick, prelude::Entity, world::World};
 use fixedbitset::{FixedBitSet, Ones};
 use thiserror::Error;
+use tracing::trace;
 
 use crate::dynamic_query::{DynamicItem, DynamicQuery};
 use crate::iter::{DynamicQueryIter, RoDynamicQueryIter};
@@ -27,6 +28,11 @@ pub struct Ticks {
     pub last_run: Tick,
     pub this_run: Tick,
 }
+impl Default for Ticks {
+    fn default() -> Self {
+        Ticks { last_run: Tick::new(0), this_run: Tick::new(0) }
+    }
+}
 impl Ticks {
     pub fn new(last_run: Tick, this_run: Tick) -> Self {
         Self { last_run, this_run }
@@ -41,13 +47,28 @@ impl MatchedArchetypes {
     }
 
     fn contains(&self, entity_archetype: ArchetypeId) -> bool {
+        trace!("Contains {entity_archetype:?}?");
         let id = archetype_id_to_u32(entity_archetype);
-        self.0.contains(id as usize)
+        let yes = self.0.contains(id as usize);
+        trace!("> {yes}");
+        yes
     }
 
     pub(crate) fn iter(&self) -> iter::Map<Ones, fn(usize) -> ArchetypeId> {
         self.0.ones().map(usize_to_archetype_id)
     }
+}
+
+#[derive(Debug, Error)]
+pub enum DynamicQueryError {
+    #[error("No entity with id {0:?} exists in the world.")]
+    Dangling(Entity),
+    #[error(
+        "Entity with id {0:?} doesn't have the right set of components to satisfy DynamicState."
+    )]
+    Unmatched(Entity),
+    #[error("A `Changed` or `Added` filter means {0:?} doesn't satisfy DynamicState.")]
+    NotInTick(Entity),
 }
 
 #[derive(Clone, Debug)]
@@ -88,12 +109,17 @@ impl DynamicState {
     /// This is `O(n * c)` where 'n' is the size of the archetype and 'c' is
     /// the number of filter conjunctions (ie: `Or` clauses).
     pub fn add_archetype(&mut self, archetype: &Archetype) -> bool {
-        let mut matches = false;
-        for conjunction in self.filters.conjunctions(&self.fetches) {
-            if conjunction.includes_archetype(archetype) {
-                matches = true;
-                self.archetype_ids.add_archetype(archetype.id());
-            }
+        let conjs = self.filters.len();
+        trace!("add_arch? {:?}, {conjs} conjs", archetype.id());
+        let matches = if self.filters.is_empty() {
+            self.fetches.all_included(archetype.components())
+        } else {
+            let mut conjunctions = self.filters.conjunctions();
+            conjunctions.any(|c| c.includes(&self.fetches, archetype))
+        };
+        if matches {
+            self.archetype_ids.add_archetype(archetype.id());
+            trace!("> matches!");
         }
         matches
     }
@@ -113,47 +139,25 @@ impl DynamicState {
         // SAFETY: we just initialized all buffer items
         unsafe { assume_init_mut(self.item_buffer.as_mut()) }
     }
-    fn _update_archetypes_unsafe_world_cell(&mut self, _world: UnsafeWorldCell) {
-        // self.validate_world(world.id());
-        // let archetypes = world.archetypes();
-        // let new_generation = archetypes.generation();
-        // let old_generation = std::mem::replace(&mut self.archetype_generation, new_generation);
-        // let archetype_index_range = old_generation.value()..new_generation.value();
 
-        // for archetype_index in archetype_index_range {
-        //     self.new_archetype(&archetypes[ArchetypeId::new(archetype_index)]);
-        // }
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum DynamicQueryError {
-    #[error("No entity with id {0:?} exists in the world.")]
-    DanglingEntity(Entity),
-    #[error(
-        "Entity with id {0:?} doesn't have the right set of components to satisfy DynamicState."
-    )]
-    InvalidEntity(Entity),
-    #[error("A `Changed` or `Added` filter means {0:?} doesn't satisfy DynamicState.")]
-    NotInTick(Entity),
-}
-
-impl DynamicState {
     pub fn get_unchecked_manual<'w, 's>(
         &'s mut self,
         world: UnsafeWorldCell<'w>,
         entity: Entity,
-        ticks: Ticks,
     ) -> Result<&'s mut [DynamicItem<'w>], DynamicQueryError> {
-        let dangling_entity = DynamicQueryError::DanglingEntity(entity);
+        let ticks = Ticks {
+            last_run: world.last_change_tick(),
+            this_run: world.change_tick(),
+        };
+        let dangling_entity = DynamicQueryError::Dangling(entity);
         let entity = world.get_entity(entity).ok_or(dangling_entity)?;
         let archetype = entity.archetype();
         if !self.archetype_ids.contains(archetype.id()) {
-            return Err(DynamicQueryError::InvalidEntity(entity.id()));
+            return Err(DynamicQueryError::Unmatched(entity.id()));
         }
 
-        let mut conjunctions = self.filters.tick_conjunctions(ticks);
-        if !conjunctions.any(|c| c.within_tick(entity)) {
+        let mut conjunctions = self.filters.conjunctions();
+        if !conjunctions.any(|c| c.within_tick(ticks, entity)) {
             return Err(DynamicQueryError::NotInTick(entity.id()));
         }
         drop(conjunctions);
@@ -163,34 +167,24 @@ impl DynamicState {
         &'s mut self,
         world: &'w World,
         entity: Entity,
-        ticks: Ticks,
     ) -> Result<&'s [DynamicItem<'w>], DynamicQueryError> {
         let world = world.as_unsafe_world_cell_readonly();
-        self.get_unchecked_manual(world, entity, ticks).map(|x| &*x)
+        self.get_unchecked_manual(world, entity).map(|x| &*x)
     }
     pub fn get_mut<'w, 's>(
         &'s mut self,
         world: &'w mut World,
         entity: Entity,
-        ticks: Ticks,
     ) -> Result<&'s mut [DynamicItem<'w>], DynamicQueryError> {
         let world = world.as_unsafe_world_cell();
-        self.get_unchecked_manual(world, entity, ticks)
+        self.get_unchecked_manual(world, entity)
     }
-    pub fn iter<'w, 's>(
-        &'s mut self,
-        world: &'w World,
-        ticks: Ticks,
-    ) -> RoDynamicQueryIter<'w, 's> {
+    pub fn iter<'w, 's>(&'s mut self, world: &'w World) -> RoDynamicQueryIter<'w, 's> {
         let world = world.as_unsafe_world_cell_readonly();
-        RoDynamicQueryIter::new(world, self, ticks)
+        RoDynamicQueryIter::new(world, self)
     }
-    pub fn iter_mut<'w, 's>(
-        &'s mut self,
-        world: &'w mut World,
-        ticks: Ticks,
-    ) -> DynamicQueryIter<'w, 's> {
+    pub fn iter_mut<'w, 's>(&'s mut self, world: &'w mut World) -> DynamicQueryIter<'w, 's> {
         let world = world.as_unsafe_world_cell();
-        DynamicQueryIter::new(world, self, ticks)
+        DynamicQueryIter::new(world, self)
     }
 }

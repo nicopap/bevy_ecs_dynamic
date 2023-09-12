@@ -1,13 +1,16 @@
-use bevy_ecs::component::{ComponentId, ComponentInfo, Components};
-use bevy_ecs::prelude::Query;
+use core::fmt;
+
 use bevy_ecs::query::{ReadOnlyWorldQuery, WorldQuery};
-use bevy_reflect::TypeRegistry;
+use bevy_ecs::{component::ComponentId, prelude::Query, world::World};
+use bevy_reflect::ReflectFromPtr;
 
 use crate::DynamicQuery;
 use traits::{DFetches, DOr};
 
+pub use methods::DynamicQueryBuilder;
 pub use traits::DQuery;
 
+mod methods;
 mod traits;
 
 #[derive(Clone, Copy, Debug)]
@@ -22,15 +25,26 @@ pub struct AndFilters(pub Vec<AndFilter>);
 #[derive(Clone, Debug)]
 pub struct OrFilters(pub Vec<AndFilters>);
 
-#[derive(Clone, Copy, Debug)]
-pub enum Fetch<'a> {
-    Read(&'a ComponentInfo),
-    Mut(&'a ComponentInfo),
-    OptionRead(&'a ComponentInfo),
-    OptionMut(&'a ComponentInfo),
+#[derive(Clone)]
+pub struct FetchData {
+    pub id: ComponentId,
+    pub from_ptr: ReflectFromPtr,
+}
+impl fmt::Debug for FetchData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("FetchData").field(&self.id).finish()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Fetch {
+    Read(FetchData),
+    Mut(FetchData),
+    OptionRead(FetchData),
+    OptionMut(FetchData),
     Entity,
 }
-impl Fetch<'_> {
+impl Fetch {
     // SAFETY: !!!!!IMPORTANT!!!! Make sure this is in the same order as
     // the enum variants in `Fetch`.
     pub(crate) const READ_IDX: usize = 0;
@@ -48,31 +62,31 @@ impl Fetch<'_> {
             Fetch::Entity => Fetch::ENTITY_IDX,
         }
     }
-    pub(crate) fn info(&self) -> &ComponentInfo {
+    pub(crate) fn data(&self) -> &FetchData {
         use Fetch::{Mut, OptionMut, OptionRead, Read};
         match self {
-            Read(comp) | Mut(comp) | OptionRead(comp) | OptionMut(comp) => comp,
+            Read(data) | Mut(data) | OptionRead(data) | OptionMut(data) => data,
             Fetch::Entity => {
                 unreachable!("Entity Fetch cannot be duplicated (probably several encountered)")
             }
         }
     }
 }
-impl PartialEq for Fetch<'_> {
+impl PartialEq for Fetch {
     fn eq(&self, other: &Self) -> bool {
         use Fetch::{Mut, OptionMut, OptionRead, Read};
         match (self, other) {
             (Read(left), Read(right))
             | (Mut(left), Mut(right))
             | (OptionRead(left), OptionRead(right))
-            | (OptionMut(left), OptionMut(right)) => left.id() == right.id(),
+            | (OptionMut(left), OptionMut(right)) => left.id == right.id,
             (Fetch::Entity, Fetch::Entity) => true,
             _ => false,
         }
     }
 }
-impl Eq for Fetch<'_> {}
-impl PartialOrd for Fetch<'_> {
+impl Eq for Fetch {}
+impl PartialOrd for Fetch {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         use std::cmp::Ordering::{Equal, Greater, Less};
         use Fetch::{Mut, OptionMut, OptionRead, Read};
@@ -80,7 +94,7 @@ impl PartialOrd for Fetch<'_> {
             (Read(left), Read(right))
             | (Mut(left), Mut(right))
             | (OptionRead(left), OptionRead(right))
-            | (OptionMut(left), OptionMut(right)) => left.id().partial_cmp(&right.id()),
+            | (OptionMut(left), OptionMut(right)) => left.id.partial_cmp(&right.id),
             (Fetch::Entity, Fetch::Entity) => Some(Equal),
             (Mut(_), Read(_))
             | (OptionRead(_), Read(_) | Mut(_))
@@ -90,7 +104,7 @@ impl PartialOrd for Fetch<'_> {
         }
     }
 }
-impl Ord for Fetch<'_> {
+impl Ord for Fetch {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.partial_cmp(other).unwrap()
     }
@@ -101,7 +115,9 @@ where
     Q: WorldQuery + DFetches,
     F: ReadOnlyWorldQuery + DOr,
 {
-    fn dynamic(components: &Components, registry: &TypeRegistry) -> DynamicQuery {
-        DynamicQuery::new(Q::fetches(components), F::or(components), registry).unwrap()
+    fn dynamic(world: &mut World) -> DynamicQuery {
+        let fetches = Q::fetches(world);
+        let filters = F::or(world);
+        DynamicQuery::new(fetches, filters).unwrap()
     }
 }

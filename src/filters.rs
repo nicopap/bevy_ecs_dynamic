@@ -4,11 +4,12 @@ use bevy_ecs::archetype::Archetype;
 use bevy_ecs::component::{ComponentId, Tick};
 use bevy_ecs::world::unsafe_world_cell::UnsafeEntityCell;
 use fixedbitset::FixedBitSet;
+use tracing::trace;
 
 use crate::builder::{AndFilter, AndFilters, OrFilters};
 use crate::debug_unchecked::DebugUnchecked;
 use crate::fetches::Fetches;
-use crate::jagged_array::{JaggedArray, JaggedArrayBuilder};
+use crate::jagged_array::{JaggedArray, JaggedArrayBuilder, JaggedArrayRows};
 use crate::state::Ticks;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,8 +75,13 @@ impl From<AndFilter> for Filter {
 /// [`Filters`] are a list of "conjunction".
 pub struct Conjunction<'a> {
     filters: &'a [Filter],
-    // TODO(perf): I think this can be safely removed?
-    fetches: &'a Fetches,
+}
+pub struct Conjunctions<'a>(JaggedArrayRows<'a, Filter>);
+impl<'a> Iterator for Conjunctions<'a> {
+    type Item = Conjunction<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|filters| Conjunction { filters })
+    }
 }
 
 struct InclusiveFilter<'a>(&'a [Filter]);
@@ -84,6 +90,12 @@ struct ChangedFilter<'a>(&'a [Filter]);
 struct AddedFilter<'a>(&'a [Filter]);
 
 impl Filters {
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
     /// # Safety
     /// - Filters within conjunctions must be sorted
     /// - There is no duplicate inclusive filters within each single
@@ -99,6 +111,10 @@ impl Filters {
     pub fn new(OrFilters(dsl_value): OrFilters) -> Option<Self> {
         let cell_count = dsl_value.iter().map(|x| x.0.len()).sum();
         let mut builder = JaggedArrayBuilder::new_with_capacity(dsl_value.len(), cell_count);
+        trace!(
+            "new Filters with {} conjunction of total of {cell_count} terms",
+            dsl_value.len()
+        );
         for AndFilters(filters) in dsl_value.into_iter() {
             let mut filters: Vec<_> = filters.into_iter().map(Filter::from).collect();
             filters.sort_unstable();
@@ -109,16 +125,8 @@ impl Filters {
         }
         Some(Filters(builder.build()))
     }
-    pub fn conjunctions<'a>(
-        &'a self,
-        fetches: &'a Fetches,
-    ) -> impl Iterator<Item = Conjunction<'a>> + 'a {
-        let conjunction = |filters| Conjunction { filters, fetches };
-        self.0.rows_iter().map(conjunction)
-    }
-    pub fn tick_conjunctions(&self, ticks: Ticks) -> impl Iterator<Item = TickConjunction> + '_ {
-        let conjunction = move |filters| TickConjunction { filters, ticks };
-        self.0.rows_iter().map(conjunction)
+    pub fn conjunctions<'a>(&'a self) -> Conjunctions<'a> {
+        Conjunctions(self.0.rows_iter())
     }
 }
 impl TryFrom<OrFilters> for Filters {
@@ -163,30 +171,26 @@ fn filters(filters: &[Filter]) -> (InclusiveFilter, ExclusiveFilter) {
     let (inclusive, exclusive) = filters.split_at(first_exclusive);
     (InclusiveFilter(inclusive), ExclusiveFilter(exclusive))
 }
-impl<'a> Conjunction<'a> {
+impl Conjunction<'_> {
     // O(n²) where n is sizeof archetype
-    pub fn includes_archetype(&self, archetype: &Archetype) -> bool {
+    pub fn includes(&self, fetches: &Fetches, archetype: &Archetype) -> bool {
         // NOTE(perf): We don't skip this on `fetch_archetype == false` because
         // we hope the optimizer can merge `all_included` `for` with this one.
         let (inclusive, exclusive) = filters(self.filters);
         let include_filter = inclusive.all_included(archetype.components());
         let exclude_filter = exclusive.any_excluded(archetype.components());
-        let fetch_archetype = self.fetches.all_included(archetype.components());
+        let fetch_archetype = fetches.all_included(archetype.components());
+        trace!("inc:{include_filter}, exc:{exclude_filter}, arch:{fetch_archetype}");
 
         fetch_archetype && include_filter && !exclude_filter
     }
-}
-/// [`Filters`] are a list of "conjunction"
-pub struct TickConjunction<'a> {
-    filters: &'a [Filter],
-    ticks: Ticks,
-}
-impl<'a> TickConjunction<'a> {
+
     // NOTE: unlike `fetches::FetchesIter::next`, we can't assume we are on the
     // right table, because we may call this with a table from a different conjunction.
     // TODO(perf): This needs to be cached.
     // O(n * c) where n is sizeof archetype, c how many components in conjunciton
-    pub fn within_tick(&self, entity: UnsafeEntityCell) -> bool {
+    pub fn within_tick(&self, ticks: Ticks, entity: UnsafeEntityCell) -> bool {
+        let Ticks { last_run, this_run } = ticks;
         let archetype = entity.archetype();
         let (inclusive, exclusive) = filters(self.filters);
         let include_filter = inclusive.all_included(archetype.components());
@@ -195,11 +199,10 @@ impl<'a> TickConjunction<'a> {
         if !include_filter || exclude_filter {
             return false;
         }
-        let Ticks { last_run, this_run } = self.ticks;
         let (changed, added) = tick_filters(self.filters);
         let changed = changed.within_tick(entity, last_run, this_run);
         let added = added.within_tick(entity, last_run, this_run);
-
+        trace!("Entity {:?} is changed:{changed}, add:{added}", entity.id());
         changed && added
     }
 }
