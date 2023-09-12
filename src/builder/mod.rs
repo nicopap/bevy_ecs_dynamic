@@ -22,7 +22,7 @@ pub enum AndFilter {
 }
 #[derive(Clone, Debug)]
 pub struct AndFilters(pub Vec<AndFilter>);
-#[derive(Clone, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct OrFilters(pub Vec<AndFilters>);
 
 #[derive(Clone)]

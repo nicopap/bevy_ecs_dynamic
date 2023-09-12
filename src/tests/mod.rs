@@ -5,7 +5,7 @@ use bevy_ecs::{component::StorageType, system::SystemState};
 use cuicui_dsl::{dsl, DslBundle};
 use test_log::test;
 
-use crate::{DQuery, DynamicQuery};
+use crate::{DQuery, DynamicQuery, DynamicQueryBuilder};
 
 use self::dy_cmp::Dyeq;
 
@@ -153,6 +153,15 @@ struct SetRegFancy {
 // - With
 // - Get: present/not present
 
+fn make_query2(world: &mut World) -> DynamicQuery {
+    DynamicQueryBuilder::new(world)
+        .component::<SetRegTag>()
+        .optional_mut::<TableRegFancy>()
+        .or(|b| b.changed::<Transform>())
+        .or(|b| b.without::<Transform>().added::<SetRegSimple>())
+        .build()
+        .unwrap()
+}
 fn make_query(world: &mut World) -> DynamicQuery {
     DynamicQuery::from_query::<
         Query<

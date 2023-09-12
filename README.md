@@ -58,6 +58,41 @@ var my_query = {
 runtime.register_system(my_query, damage_system);
 ```
 
+### Rust API
+
+The `builder` module contains various ways to build a dynamic query.
+
+One of them is just a trait over bevy `Query`s. You can't create a dynamic
+pendant of a pre-existing bevy query using that builder pattern:
+
+```rust
+fn make_query(world: &mut World) -> DynamicQuery {
+    DynamicQuery::from_query::<
+        Query<
+            (&SetRegTag, Option<&mut TableRegFancy>),
+            Or<(
+                Changed<Transform>,
+                (Without<Transform>, Added<SetRegSimple>),
+            )>,
+        >,
+    >(world)
+}
+```
+
+The other reflects the builder syntax defined by james-j-obrian in their own
+dynamic query implementation:
+
+```rust
+fn make_query(world: &mut World) -> DynamicQuery {
+  DynamicQueryBuilder::new(world)
+    .component::<SetRegTag>()
+    .optional_mut::<TableRegFancy>()
+    .or(|b| b.changed::<Transform>())
+    .or(|b| b.without::<Transform>().added::<SetRegSimple>())
+    .build()
+}
+```
+
 
 ## Future works
 
