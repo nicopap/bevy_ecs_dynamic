@@ -26,8 +26,9 @@ struct Cube;
 
 #[derive(Component, Reflect, Debug, Default)]
 #[reflect(Component)]
-struct Cycling {
+struct Cycle {
     phase: f32,
+    speed: f32,
     ray: Vec3,
     center: Vec3,
     up: Vec3,
@@ -42,7 +43,7 @@ impl Plugin for SpawnScenePlugin {
             .register_type::<Blue>()
             .register_type::<Sphere>()
             .register_type::<Cube>()
-            .register_type::<Cycling>()
+            .register_type::<Cycle>()
             .add_systems(Startup, setup)
             .add_systems(Update, (cycle, animate_light_direction));
     }
@@ -111,8 +112,9 @@ fn setup(
             }),
             ..default()
         },
-        Cycling {
+        Cycle {
             phase: PI / 8.,
+            speed: 1.,
             ray: Vec3::Y,
             center: Vec3::new(-2.2, 0.5, 1.0),
             up: Vec3::X,
@@ -130,8 +132,9 @@ fn setup(
             transform: Transform::from_xyz(0.0, 0.5, 0.0),
             ..default()
         },
-        Cycling {
+        Cycle {
             phase: 0.,
+            speed: 3.,
             ray: Vec3::X,
             center: Vec3::new(0.0, 0.5, 0.0),
             up: Vec3::Y,
@@ -146,8 +149,9 @@ fn setup(
             material: materials.add(StandardMaterial { base_color: Color::BLUE, ..default() }),
             ..default()
         },
-        Cycling {
+        Cycle {
             phase: 0.,
+            speed: 0.5,
             ray: Vec3::X,
             center: Vec3::new(1.5, 1.0, 1.5),
             up: Vec3::Z,
@@ -276,10 +280,32 @@ fn setup(
 
     // example instructions
     commands.spawn(
-        TextBundle::from_section(
-            "Try entering 'mut Transform, Sphere' in blue field and '.scale.x += 1' in yellow field",
-            TextStyle { font_size: 20.0, ..default() },
-        )
+        TextBundle::from_sections([
+            TextSection::new(
+                "Blue wall and sphere has the 'Blue' component, same for 'Green' and 'Red'\n",
+                TextStyle { font_size: 20.0, ..default() },
+            ),
+            TextSection::new(
+                "Walls have the 'Cube' component\n",
+                TextStyle { font_size: 20.0, ..default() },
+            ),
+            TextSection::new(
+                "Spheres have the 'Sphere' component\n",
+                TextStyle { font_size: 20.0, ..default() },
+            ),
+            TextSection::new(
+                "Try entering 'mut Transform, Sphere' in blue field and '.scale.x += 1' in yellow field\n",
+                TextStyle { font_size: 20.0, ..default() },
+            ),
+            TextSection::new(
+                "'.speed *= 5' and 'Query<&mut Cycle>' is also fun\n",
+                TextStyle { font_size: 20.0, ..default() },
+            ),
+            TextSection::new(
+                "\nPress enter while blue field is focused to see the result",
+                TextStyle { font_size: 20.0, ..default() },
+            ),
+        ])
         .with_style(Style {
             position_type: PositionType::Absolute,
             top: Val::Px(12.0),
@@ -298,9 +324,10 @@ fn animate_light_direction(
     }
 }
 
-fn cycle(time: Res<Time>, mut query: Query<(&mut Transform, &mut Cycling)>) {
+fn cycle(time: Res<Time>, mut query: Query<(&mut Transform, &mut Cycle)>) {
     let delta = time.delta_seconds();
     for (mut transform, mut cycle) in &mut query {
+        let delta = delta * cycle.speed;
         cycle.phase = (cycle.phase + delta) % TAU;
         let rotate = Quat::from_axis_angle(cycle.up, cycle.phase);
         transform.translation = cycle.center + rotate * cycle.ray;
