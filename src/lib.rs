@@ -12,7 +12,7 @@ macro_rules! assert_invariant {
     }};
 }
 
-mod builder;
+pub mod builder;
 mod debug_unchecked;
 mod dynamic_query;
 mod fetches;

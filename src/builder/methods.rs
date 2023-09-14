@@ -9,7 +9,7 @@ use crate::DynamicQuery;
 
 use super::{AndFilter, AndFilters, Fetch, FetchData, OrFilters};
 
-pub struct ConjunctionBuilder<'w> {
+pub struct OrBuilder<'w> {
     world: &'w mut World,
     filters: AndFilters,
 }
@@ -41,10 +41,9 @@ impl<'w> DynamicQueryBuilder<'w> {
 
     pub fn or(
         &mut self,
-        f: impl for<'a, 'z> FnOnce(&'a mut ConjunctionBuilder<'z>) -> &'a mut ConjunctionBuilder<'z>,
+        f: impl for<'a, 'z> FnOnce(&'a mut OrBuilder<'z>) -> &'a mut OrBuilder<'z>,
     ) -> &mut Self {
-        let mut conjunction =
-            ConjunctionBuilder { world: self.world, filters: AndFilters(Vec::new()) };
+        let mut conjunction = OrBuilder { world: self.world, filters: AndFilters(Vec::new()) };
         f(&mut conjunction);
         self.filters.0.push(conjunction.filters);
         self
@@ -95,7 +94,7 @@ impl<'w> DynamicQueryBuilder<'w> {
     }
 }
 
-impl<'w> ConjunctionBuilder<'w> {
+impl<'w> OrBuilder<'w> {
     pub fn with<T: Component>(&mut self) -> &mut Self {
         let data = self.world.init_component::<T>();
         self.with_by_id(data)

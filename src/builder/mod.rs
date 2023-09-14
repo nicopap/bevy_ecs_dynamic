@@ -8,9 +8,11 @@ use crate::DynamicQuery;
 use traits::{DFetches, DOr};
 
 pub use methods::DynamicQueryBuilder;
+pub use named::{NamedDynamicBuilder, NamedOrBuilder};
 pub use traits::DQuery;
 
 mod methods;
+mod named;
 mod traits;
 
 #[derive(Clone, Copy, Debug)]

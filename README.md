@@ -62,6 +62,8 @@ runtime.register_system(my_query, damage_system);
 
 The `builder` module contains various ways to build a dynamic query.
 
+#### `Query` constructor API
+
 One of them is just a trait over bevy `Query`s. You can't create a dynamic
 pendant of a pre-existing bevy query using that builder pattern:
 
@@ -79,6 +81,8 @@ fn make_query(world: &mut World) -> DynamicQuery {
 }
 ```
 
+#### Method-based API
+
 The other reflects the builder syntax defined by james-j-obrian in their own
 dynamic query implementation:
 
@@ -89,6 +93,34 @@ fn make_query(world: &mut World) -> DynamicQuery {
     .optional_mut::<TableRegFancy>()
     .or(|b| b.changed::<Transform>())
     .or(|b| b.without::<Transform>().added::<SetRegSimple>())
+    .build()
+}
+```
+
+#### Name-based API
+
+Since everything is fully dynamic, it's also possible to use plain-text
+component names. The API reflects that of the james-j-obrian one, but with
+strings instead of types.
+
+Note that unlike the other APIs, it is necessary for the components to be first
+initialized in the world.
+
+If the components are already used in different queries, this is a non-issue,
+but if the components are typically only used in dymaic context, `init_component`
+is needed.
+
+```rust
+fn make_query(world: &mut World) -> DynamicQuery {
+  world.init_component::<SetRegTag>();
+  world.init_component::<TableRegFancy>();
+  world.init_component::<SetRegSimple>();
+
+  NamedDynamicBuilder::new(world)
+    .component("SetRegTag")
+    .optional_mut("TableRegFancy")
+    .or(|b| b.changed("Transform"))
+    .or(|b| b.without("Transform").added("SetRegSimple"))
     .build()
 }
 ```
