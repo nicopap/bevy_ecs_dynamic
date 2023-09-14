@@ -6,13 +6,11 @@ use cuicui_dsl::{dsl, DslBundle};
 use pretty_assertions::assert_str_eq;
 use test_log::test;
 
+use crate::pretty_print::{DynShow, DynShowT, ShowReflect};
 use crate::{DQuery, DynamicQuery, DynamicQueryBuilder};
-
 use dy_cmp::Dyeq;
-use pretty_print::{DynShow, DynShowT, ShowReflect};
 
 mod dy_cmp;
-mod pretty_print;
 
 #[derive(Clone, Copy, Debug, Default)]
 enum Complexity {

@@ -1,3 +1,13 @@
+[workspace]
+resolver = "2"
+exclude = ["assets/"]
+members = ["examples/*"]
+
+[workspace.package]
+edition = "2021"
+authors = []
+license = "MIT OR Apache-2.0"
+
 [package]
 name = "bevy_mod_dynamic_query"
 version = "0.1.0"
@@ -12,8 +22,9 @@ tracing = "0.1.37"
 thiserror = "1.0.48"
 
 [dev-dependencies]
-cuicui_dsl = "0.9.0"
 bevy = { version = "0.11.2", default-features = false }
+cuicui_dsl = "0.9.0"
 test-log = { version = "0.2.12", default-features = false, features = ["trace"] }
 tracing-subscriber = "0.3.17"
 pretty_assertions = "1.4.0"
+

@@ -125,7 +125,7 @@ impl Filters {
         }
         Some(Filters(builder.build()))
     }
-    pub fn conjunctions<'a>(&'a self) -> Conjunctions<'a> {
+    pub fn conjunctions(&self) -> Conjunctions {
         Conjunctions(self.0.rows_iter())
     }
 }

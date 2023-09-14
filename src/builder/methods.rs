@@ -49,12 +49,12 @@ impl<'w> DynamicQueryBuilder<'w> {
         self
     }
     pub fn component<T: Component>(&mut self) -> &mut Self {
-        let data = with_info::<T>(&mut self.world);
+        let data = with_info::<T>(self.world);
         self.ref_by_id(data)
     }
 
     pub fn component_mut<T: Component>(&mut self) -> &mut Self {
-        let data = with_info::<T>(&mut self.world);
+        let data = with_info::<T>(self.world);
         self.mut_by_id(data)
     }
 
@@ -69,12 +69,12 @@ impl<'w> DynamicQueryBuilder<'w> {
     }
 
     pub fn optional<T: Component>(&mut self) -> &mut Self {
-        let data = with_info::<T>(&mut self.world);
+        let data = with_info::<T>(self.world);
         self.optional_ref_by_id(data)
     }
 
     pub fn optional_mut<T: Component>(&mut self) -> &mut Self {
-        let data = with_info::<T>(&mut self.world);
+        let data = with_info::<T>(self.world);
         self.optional_mut_by_id(data)
     }
 

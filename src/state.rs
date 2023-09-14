@@ -160,7 +160,6 @@ impl DynamicState {
         if !conjunctions.any(|c| c.within_tick(ticks, entity)) {
             return Err(DynamicQueryError::NotInTick(entity.id()));
         }
-        drop(conjunctions);
         Ok(self.buffer_row(entity))
     }
     pub fn get<'w, 's>(
