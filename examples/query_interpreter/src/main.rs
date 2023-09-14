@@ -53,7 +53,7 @@ struct UpdateInputField;
 
 fn main() {
     App::new()
-        .add_plugins(
+        .add_plugins((
             DefaultPlugins.set(bevy::log::LogPlugin {
                 level: bevy::log::Level::TRACE,
                 filter: "\
@@ -63,8 +63,9 @@ fn main() {
           bevy_render::view::window=info,bevy_ecs::world::entity_ref=info"
                     .to_string(),
             }),
-        )
-        .add_plugins(TextInputPlugin)
+            TextInputPlugin,
+            spawn_scene::SpawnScenePlugin,
+        ))
         .init_resource::<Interpreter>()
         .register_type::<QueryInputField>()
         .register_type::<UpdateInputField>()
@@ -83,8 +84,6 @@ fn main() {
 }
 
 fn setup(mut commands: Commands) {
-    commands.spawn(Camera2dBundle::default());
-
     commands
         .spawn(NodeBundle {
             style: Style {

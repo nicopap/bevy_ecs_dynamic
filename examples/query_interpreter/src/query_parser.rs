@@ -72,9 +72,9 @@ pub fn query<'i>(input: &mut &'i str) -> PResult<QueryStr<'i>> {
     let or_filters = || separated1(ws!(conjunction()), "|");
     let fetches = repeat(1.., ws!(fetch));
 
-    (fetches, opt(preceded(",", ws!(or_filters()))))
-        .map(|(fetches, filters)| QueryStr { fetches, filters: filters.unwrap_or(Vec::new()) })
-        .parse_next(input)
+    let alt_query = (fetches, opt(preceded(",", ws!(or_filters()))))
+        .map(|(fetches, filters)| QueryStr { fetches, filters: filters.unwrap_or(Vec::new()) });
+    alt((rust_like::query, alt_query)).parse_next(input)
 }
 fn fetch<'i>(input: &mut &'i str) -> PResult<FetchStr<'i>> {
     alt((
@@ -101,49 +101,58 @@ fn component<'i>(input: &mut &'i str) -> PResult<&'i str> {
         .recognize()
         .parse_next(input)
 }
-// pub fn query<'i>(input: &mut &'i str) -> PResult<QueryStr<'i>> {
-//     delimited(
-//         "Query<",
-//         (ws!(fetches), opt(preceded(",", ws!(or_filters)))),
-//         ">",
-//     )
-//     .map(|(fetches, filters)| QueryStr { fetches, filters: filters.unwrap_or(Vec::new()) })
-//     .parse_next(input)
-// }
-// fn fetches<'i>(input: &mut &'i str) -> PResult<Vec<FetchStr<'i>>> {
-//     alt((
-//         delimited("(", separated1(ws!(fetch), ","), ")"),
-//         ws!(fetch).map(|f| vec![f]),
-//     ))
-//     .parse_next(input)
-// }
-// fn fetch<'i>(input: &mut &'i str) -> PResult<FetchStr<'i>> {
-//     alt((
-//         preceded("&", component).map(FetchStr::Read),
-//         preceded("&mut ", component).map(FetchStr::Mut),
-//         delimited("Option<&", component, ">").map(FetchStr::OptionRead),
-//         delimited("Option<&mut ", component, ">").map(FetchStr::OptionMut),
-//         "Entity".map(|_| FetchStr::Entity),
-//     ))
-//     .parse_next(input)
-// }
-// fn or_filters<'i>(input: &mut &'i str) -> PResult<Vec<AndFiltersStr<'i>>> {
-//     delimited("Or<(", separated1(ws!(conjunction), ","), ")>").parse_next(input)
-// }
-// fn conjunction<'i>(input: &mut &'i str) -> PResult<AndFiltersStr<'i>> {
-//     alt((
-//         delimited("(", separated1(ws!(filter), ","), ")"),
-//         filter.map(|f| vec![f]),
-//     ))
-//     .map(AndFiltersStr)
-//     .parse_next(input)
-// }
-// fn filter<'i>(input: &mut &'i str) -> PResult<AndFilterStr<'i>> {
-//     alt((
-//         delimited("With<", component, ">").map(AndFilterStr::With),
-//         delimited("Without<", component, ">").map(AndFilterStr::Without),
-//         delimited("Added<", component, ">").map(AndFilterStr::Added),
-//         delimited("Changed<", component, ">").map(AndFilterStr::Changed),
-//     ))
-//     .parse_next(input)
-// }
+mod rust_like {
+    use super::{component, AndFilterStr, AndFiltersStr, FetchStr, QueryStr};
+    use winnow::{
+        ascii::multispace0,
+        combinator::{alt, delimited, opt, preceded, separated1},
+        PResult, Parser,
+    };
+
+    pub fn query<'i>(input: &mut &'i str) -> PResult<QueryStr<'i>> {
+        delimited(
+            "Query<",
+            (ws!(fetches), opt(preceded(",", ws!(or_filters)))),
+            ">",
+        )
+        .map(|(fetches, filters)| QueryStr { fetches, filters: filters.unwrap_or(Vec::new()) })
+        .parse_next(input)
+    }
+    fn fetches<'i>(input: &mut &'i str) -> PResult<Vec<FetchStr<'i>>> {
+        alt((
+            delimited("(", separated1(ws!(fetch), ","), ")"),
+            ws!(fetch).map(|f| vec![f]),
+        ))
+        .parse_next(input)
+    }
+    fn fetch<'i>(input: &mut &'i str) -> PResult<FetchStr<'i>> {
+        alt((
+            preceded("&mut ", component).map(FetchStr::Mut),
+            preceded("&", component).map(FetchStr::Read),
+            delimited("Option<&mut ", component, ">").map(FetchStr::OptionMut),
+            delimited("Option<&", component, ">").map(FetchStr::OptionRead),
+            "Entity".map(|_| FetchStr::Entity),
+        ))
+        .parse_next(input)
+    }
+    fn or_filters<'i>(input: &mut &'i str) -> PResult<Vec<AndFiltersStr<'i>>> {
+        delimited("Or<(", separated1(ws!(conjunction), ","), ")>").parse_next(input)
+    }
+    fn conjunction<'i>(input: &mut &'i str) -> PResult<AndFiltersStr<'i>> {
+        alt((
+            delimited("(", separated1(ws!(filter), ","), ")"),
+            filter.map(|f| vec![f]),
+        ))
+        .map(AndFiltersStr)
+        .parse_next(input)
+    }
+    fn filter<'i>(input: &mut &'i str) -> PResult<AndFilterStr<'i>> {
+        alt((
+            delimited("With<", component, ">").map(AndFilterStr::With),
+            delimited("Without<", component, ">").map(AndFilterStr::Without),
+            delimited("Added<", component, ">").map(AndFilterStr::Added),
+            delimited("Changed<", component, ">").map(AndFilterStr::Changed),
+        ))
+        .parse_next(input)
+    }
+}

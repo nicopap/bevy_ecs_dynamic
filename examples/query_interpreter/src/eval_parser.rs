@@ -1,4 +1,5 @@
-use winnow::combinator::{alt, delimited, preceded, repeat, separated0, separated1};
+use winnow::ascii::digit1;
+use winnow::combinator::{alt, delimited, opt, preceded, repeat, separated0, separated1};
 use winnow::{ascii::alphanumeric1, ascii::multispace0, token::tag, PResult, Parser};
 
 macro_rules! ws {
@@ -26,7 +27,7 @@ pub enum Operator {
     Div,
 }
 pub fn expressions<'i>(input: &mut &'i str) -> PResult<Vec<Expr<'i>>> {
-    separated0(expression, ",").parse_next(input)
+    separated0(expression, ws!(",")).parse_next(input)
 }
 fn expression<'i>(input: &mut &'i str) -> PResult<Expr<'i>> {
     (path, update)
@@ -47,7 +48,7 @@ fn update<'i>(input: &mut &'i str) -> PResult<Update<'i>> {
         tag("/=").map(|_| Operator::Div),
         tag("=").map(|_| Operator::Assign),
     ));
-    (ws!(op), ident)
+    (ws!(op), alt((numerical, ident)))
         .map(|(op, rvalue)| Update { op, rvalue })
         .parse_next(input)
 }
@@ -55,4 +56,7 @@ fn ident<'i>(input: &mut &'i str) -> PResult<&'i str> {
     separated1::<_, _, (), _, _, _, _>(alphanumeric1, "_")
         .recognize()
         .parse_next(input)
+}
+fn numerical<'i>(input: &mut &'i str) -> PResult<&'i str> {
+    (digit1, opt((".", digit1))).recognize().parse_next(input)
 }

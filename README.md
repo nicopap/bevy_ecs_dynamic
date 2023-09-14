@@ -17,6 +17,11 @@ conjunctions][dnf]. So we can use a `Vec<Vec<Filter>>` to express `Or`s.
 We can always provide an API that accepts a arbitrary logic expression and
 flatten it if necessary.
 
+## Usage
+
+Check the example at `examples/query_interpreter`. The README gives instructions
+on how to run the example and play with it.
+
 ### External API draft
 
 Suppose we have a script that wants to query anything.
