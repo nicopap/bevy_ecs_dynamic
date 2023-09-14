@@ -1,10 +1,9 @@
-//! A wrapper type to compare any tuple to &[DynamicItem]
-
 use bevy_ecs::{all_tuples, prelude::Entity};
 use bevy_reflect::Reflect;
 
 use crate::DynamicItem;
 
+/// Compare something to a `&[DynamicItem]`.
 pub trait Dyeq {
     fn dyeq(&self, items: &[DynamicItem]) -> bool;
 }
@@ -26,7 +25,6 @@ impl DyeqItem for Entity {
         matches!(item, DynamicItem::Entity(e) if e == self)
     }
 }
-// TODO(BUG): This is wrong for when None.
 impl<T: PartialEq + Reflect> DyeqItem for Option<&'_ T> {
     fn dyeq_item(&self, item: &DynamicItem) -> bool {
         use DynamicItem::OptionRead;

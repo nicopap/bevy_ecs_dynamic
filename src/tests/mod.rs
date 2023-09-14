@@ -3,11 +3,13 @@ use std::fmt::Debug;
 use bevy::prelude::*;
 use bevy_ecs::{component::StorageType, system::SystemState};
 use cuicui_dsl::{dsl, DslBundle};
+use pretty_assertions::assert_str_eq;
 use test_log::test;
 
 use crate::{DQuery, DynamicQuery, DynamicQueryBuilder};
 
-use self::dy_cmp::Dyeq;
+use dy_cmp::Dyeq;
+use pretty_print::{DynShow, DynShowT, ShowReflect};
 
 mod dy_cmp;
 mod pretty_print;
@@ -227,12 +229,21 @@ fn test_world() -> World {
 }
 
 #[track_caller]
-fn test_query_get<DQ: DQuery>(world: &mut World, entity: Entity, expected: impl Dyeq + Debug) {
+fn test_query_get<DQ: DQuery>(
+    world: &mut World,
+    entity: Entity,
+    expected: impl ShowReflect + Dyeq + Debug,
+) {
     let query = DynamicQuery::from_query::<DQ>(world);
     let mut state = query.state(world);
     let value = state.get(&world, entity).unwrap();
 
-    assert!(expected.dyeq(value))
+    let equivalent = expected.dyeq(value);
+    if !equivalent {
+        let expected = format!("{:?}", DynShowT(&expected));
+        let actual = format!("{:?}", DynShow::new(value));
+        assert_str_eq!(expected, actual);
+    }
 }
 #[test]
 fn simple_table_query() {
@@ -241,6 +252,5 @@ fn simple_table_query() {
     let fancy_entity = fancy_entity.get_single(&world).unwrap();
 
     let mut f = TableRegFancy::default();
-    f.zoo += 1;
     test_query_get::<Query<&TableRegFancy>>(&mut world, fancy_entity, &f)
 }

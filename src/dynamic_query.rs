@@ -31,9 +31,17 @@ impl DynamicQuery {
     /// # Examples
     ///
     /// ```
+    /// use bevy::prelude::*;
+    /// use bevy_mod_dynamic_query::DynamicQuery;
+    /// # #[derive(Component, Reflect, Default)] #[reflect(Component)] struct Sprite;
+    /// # #[derive(Component, Reflect, Default)] #[reflect(Component)] struct Transform;
+    /// # #[derive(Component, Reflect, Default)] #[reflect(Component)] struct Player;
+    ///
+    /// # fn make_query(world: &mut World) {
     /// let dynamic_query = DynamicQuery::from_query::<
     ///     Query<(&mut Transform, &Sprite), With<Player>>,
-    /// >(&mut world);
+    /// >(world);
+    /// # }
     /// ```
     ///
     /// # Panics
