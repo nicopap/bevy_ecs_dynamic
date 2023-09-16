@@ -1,9 +1,9 @@
-use std::{collections::HashSet, fmt, iter};
+use std::{collections::HashSet, fmt};
 
 use bevy_ecs::{component::ComponentId, world::unsafe_world_cell::UnsafeEntityCell};
 use bevy_reflect::ReflectFromPtr;
 use datazoo::Bitset;
-use datazoo::{jagged_array, JaggedArray};
+use datazoo::JaggedArray;
 use tracing::trace;
 
 use crate::builder::{Fetch, FetchData};
@@ -25,7 +25,7 @@ impl fmt::Debug for FetchComponent {
 pub struct Fetches {
     pub(crate) has_entity: bool,
     // TODO(perf): do not store the TypeId, which is 128 bits
-    pub(crate) components: JaggedArray<FetchComponent>,
+    pub(crate) components: JaggedArray<FetchComponent, u8, [u8; 3]>,
 }
 impl Fetches {
     pub fn new(mut fetches: Vec<Fetch>) -> Option<Self> {
@@ -35,36 +35,30 @@ impl Fetches {
             trace!("Fetch has entity");
             fetches.pop();
         }
-        let mut builder = jagged_array::Builder::new_with_capacity(4, fetches.len());
+        let mut ends = [0; 3];
+        let fetches = fetches;
         let mut last_idx = 0;
-        for fetch in fetches.into_iter() {
+        let data = fetches.into_iter().enumerate().map(|(i, fetch)| {
             let index = fetch.discriminant_index();
-            for i in last_idx..index {
-                trace!("^^^ Fetch row {i} ^^^");
-                builder.add_row(iter::empty());
+            for to_catchup in last_idx..index {
+                ends[to_catchup] = i as u8;
+                trace!("^^^ Fetch row {to_catchup} ^^^");
             }
             last_idx = index;
-
             let FetchData { id, from_ptr } = fetch.data().clone();
-            trace!("Fetch has component ID {id:?}");
-            builder.add_elem(FetchComponent { id, from_ptr });
-        }
-        for i in last_idx..4 {
-            trace!("^^ Fetch row {i} ^^");
-            builder.add_row(iter::empty());
-        }
-        let components = builder.build();
-
-        // SAFETY:
-        // - last_idx = index = fetch.discriminant_index()
-        // - fetch.discriminant_index() ∈ {0,1,2,3,4}
-        // - We panic when fetch.discriminant_index() = 4 because of fetch.info()
-        unsafe { assert_invariant!(components.height() == 4) };
+            FetchComponent { id, from_ptr }
+        });
+        let data: Box<[_]> = data.collect();
 
         // TODO(err): proper error reporting
-        if duplicates_in(components.rows(..)) {
+        if duplicates_in(&data) {
             return None;
         }
+        for i in last_idx..3 {
+            trace!("^^ Fetch row {i} ^^");
+            ends[i] = data.len() as u8;
+        }
+        let components = JaggedArray::new(ends, data).unwrap();
         Some(Fetches { has_entity, components })
     }
     pub const fn len(&self) -> usize {
@@ -93,13 +87,7 @@ impl Fetches {
     /// - `table` must contains the non-option components of this [`Fetches`].
     /// - You must have mut/read access to the mut/read components in this `Fetches`.
     pub unsafe fn iter<'w, 's>(&'s self, entity: UnsafeEntityCell<'w>) -> FetchesIter<'w, 's> {
-        FetchesIter {
-            has_entity: self.has_entity,
-            fetches: &self.components,
-            entity,
-            row_index: 0,
-            current_row: &[],
-        }
+        FetchesIter::new(self, entity)
     }
     /// # Safety
     /// - `table` must contains the non-option components of this [`Fetches`].
@@ -108,13 +96,7 @@ impl Fetches {
         &'s self,
         entity: UnsafeEntityCell<'w>,
     ) -> RoFetchesIter<'w, 's> {
-        RoFetchesIter(FetchesIter {
-            has_entity: self.has_entity,
-            fetches: &self.components,
-            entity,
-            row_index: 0,
-            current_row: &[],
-        })
+        RoFetchesIter::new(self, entity)
     }
 }
 
@@ -124,12 +106,35 @@ fn duplicates_in(fetches: &[FetchComponent]) -> bool {
 }
 
 pub struct RoFetchesIter<'w, 's>(FetchesIter<'w, 's>);
+
 pub struct FetchesIter<'w, 's> {
     has_entity: bool,
-    fetches: &'s JaggedArray<FetchComponent>,
+    fetches: &'s JaggedArray<FetchComponent, u8, [u8; 3]>,
     entity: UnsafeEntityCell<'w>,
     row_index: usize,
     current_row: &'s [FetchComponent],
+}
+impl<'w, 's> RoFetchesIter<'w, 's> {
+    /// # Safety
+    /// - `table` must contains the non-option components of this [`Fetches`].
+    /// - You must have read access to the mut/read components in this `Fetches`.
+    unsafe fn new(fetches: &'s Fetches, entity: UnsafeEntityCell<'w>) -> Self {
+        RoFetchesIter(FetchesIter::new(fetches, entity))
+    }
+}
+impl<'w, 's> FetchesIter<'w, 's> {
+    /// # Safety
+    /// - `table` must contains the non-option components of this [`Fetches`].
+    /// - You must have mut/read access to the mut/read components in this `Fetches`.
+    unsafe fn new(fetches: &'s Fetches, entity: UnsafeEntityCell<'w>) -> Self {
+        FetchesIter {
+            has_entity: fetches.has_entity,
+            fetches: &fetches.components,
+            entity,
+            row_index: 0,
+            current_row: &[],
+        }
+    }
 }
 impl<'w, 's> Iterator for FetchesIter<'w, 's> {
     type Item = DynamicItem<'w>;
