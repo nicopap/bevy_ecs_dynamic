@@ -3,7 +3,7 @@ use std::iter;
 use bevy_ecs::archetype::{Archetype, ArchetypeId, Archetypes};
 use bevy_ecs::world::unsafe_world_cell::{UnsafeEntityCell, UnsafeWorldCell};
 use bevy_ecs::{component::Tick, prelude::Entity, world::World};
-use fixedbitset::{FixedBitSet, Ones};
+use datazoo::{bitset::Ones, Bitset};
 use thiserror::Error;
 use tracing::trace;
 
@@ -12,8 +12,7 @@ use crate::iter::{DynamicQueryIter, RoDynamicQueryIter};
 use crate::maybe_item::{assume_init_mut, MaybeDynamicItem};
 use crate::{fetches::Fetches, filters::Filters};
 
-fn usize_to_archetype_id(usize: usize) -> ArchetypeId {
-    let u32 = usize as u32;
+fn u32_to_archetype_id(u32: u32) -> ArchetypeId {
     unsafe { std::mem::transmute(u32) }
 }
 fn archetype_id_to_u32(id: ArchetypeId) -> u32 {
@@ -21,7 +20,7 @@ fn archetype_id_to_u32(id: ArchetypeId) -> u32 {
     unsafe { std::mem::transmute(id) }
 }
 #[derive(Default, Clone, Debug)]
-pub(crate) struct MatchedArchetypes(FixedBitSet);
+pub(crate) struct MatchedArchetypes(Bitset<Vec<u32>>);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Ticks {
@@ -42,20 +41,19 @@ impl Ticks {
 impl MatchedArchetypes {
     fn add_archetype(&mut self, id: ArchetypeId) {
         let id = archetype_id_to_u32(id);
-        self.0.grow(id as usize + 1);
-        self.0.set(id as usize, true);
+        self.0.enable_bit_extending(id as usize);
     }
 
     fn contains(&self, entity_archetype: ArchetypeId) -> bool {
         trace!("Contains {entity_archetype:?}?");
         let id = archetype_id_to_u32(entity_archetype);
-        let yes = self.0.contains(id as usize);
+        let yes = self.0.bit(id as usize);
         trace!("> {yes}");
         yes
     }
 
-    pub(crate) fn iter(&self) -> iter::Map<Ones, fn(usize) -> ArchetypeId> {
-        self.0.ones().map(usize_to_archetype_id)
+    pub(crate) fn iter(&self) -> iter::Map<Ones, fn(u32) -> ArchetypeId> {
+        self.0.ones_in_range(..).map(u32_to_archetype_id)
     }
 }
 

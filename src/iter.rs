@@ -2,7 +2,7 @@ use std::iter;
 
 use bevy_ecs::archetype::{ArchetypeEntity, ArchetypeId};
 use bevy_ecs::world::unsafe_world_cell::{UnsafeEntityCell, UnsafeWorldCell};
-use fixedbitset::Ones;
+use datazoo::bitset::Ones;
 
 use crate::debug_unchecked::DebugUnchecked;
 use crate::state::Ticks;
@@ -27,7 +27,7 @@ pub struct RoDynamicQueryIter<'w, 's> {
     world: UnsafeWorldCell<'w>,
     fetch: &'s Fetches,
     filter: &'s Filters,
-    ids: iter::Map<Ones<'s>, fn(usize) -> ArchetypeId>,
+    ids: iter::Map<Ones<'s>, fn(u32) -> ArchetypeId>,
     buffer: Option<Box<[DynamicItem<'w>]>>,
     ticks: Ticks,
 }

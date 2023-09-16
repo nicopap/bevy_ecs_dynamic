@@ -18,7 +18,6 @@ mod dynamic_query;
 mod fetches;
 mod filters;
 mod iter;
-mod jagged_array;
 mod maybe_item;
 pub mod pretty_print;
 mod state;

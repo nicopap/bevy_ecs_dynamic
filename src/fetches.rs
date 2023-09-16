@@ -2,13 +2,13 @@ use std::{collections::HashSet, fmt, iter};
 
 use bevy_ecs::{component::ComponentId, world::unsafe_world_cell::UnsafeEntityCell};
 use bevy_reflect::ReflectFromPtr;
-use fixedbitset::FixedBitSet;
+use datazoo::Bitset;
+use datazoo::{jagged_array, JaggedArray};
 use tracing::trace;
 
 use crate::builder::{Fetch, FetchData};
 use crate::debug_unchecked::DebugUnchecked;
 use crate::dynamic_query::DynamicItem;
-use crate::jagged_array::{JaggedArray, JaggedArrayBuilder};
 
 #[derive(Clone)]
 pub struct FetchComponent {
@@ -35,7 +35,7 @@ impl Fetches {
             trace!("Fetch has entity");
             fetches.pop();
         }
-        let mut builder = JaggedArrayBuilder::new_with_capacity(4, fetches.len());
+        let mut builder = jagged_array::Builder::new_with_capacity(4, fetches.len());
         let mut last_idx = 0;
         for fetch in fetches.into_iter() {
             let index = fetch.discriminant_index();
@@ -74,17 +74,19 @@ impl Fetches {
     pub fn all_included(&self, ids: impl Iterator<Item = ComponentId>) -> bool {
         let comps = self.components.rows(Fetch::READ_IDX..=Fetch::MUT_IDX);
 
-        let mut found = FixedBitSet::with_capacity(comps.len());
+        let mut found = Bitset(Vec::with_capacity(comps.len()));
 
         // TODO(perf): Likely can avoid O(n²). If only `ComponedId`s were
         // ordered in `Archetype::components()`…
+        let mut max = 0;
         for id in ids {
             if let Some(idx) = comps.iter().position(|x| x.id == id) {
                 trace!("all_included: found {id:?} in fetches");
-                found.set(idx, true);
+                found.enable_bit_extending(idx);
+                max = max.max(idx as usize);
             }
         }
-        found.count_ones(..) == comps.len()
+        found.ones_in_range(..max).all_one()
     }
 
     /// # Safety

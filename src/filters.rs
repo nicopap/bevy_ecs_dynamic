@@ -3,13 +3,13 @@ use std::collections::HashSet;
 use bevy_ecs::archetype::Archetype;
 use bevy_ecs::component::{ComponentId, Tick};
 use bevy_ecs::world::unsafe_world_cell::UnsafeEntityCell;
-use fixedbitset::FixedBitSet;
+use datazoo::Bitset;
+use datazoo::{jagged_array, jagged_array::JaggedArrayRows, JaggedArray};
 use tracing::trace;
 
 use crate::builder::{AndFilter, AndFilters, OrFilters};
 use crate::debug_unchecked::DebugUnchecked;
 use crate::fetches::Fetches;
-use crate::jagged_array::{JaggedArray, JaggedArrayBuilder, JaggedArrayRows};
 use crate::state::Ticks;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,7 +102,7 @@ impl Filters {
     ///   conjunction.
     pub unsafe fn new_unchecked(OrFilters(dsl_value): OrFilters) -> Self {
         let cell_count = dsl_value.iter().map(|x| x.0.len()).sum();
-        let mut builder = JaggedArrayBuilder::new_with_capacity(dsl_value.len(), cell_count);
+        let mut builder = jagged_array::Builder::new_with_capacity(dsl_value.len(), cell_count);
         for AndFilters(filters) in dsl_value.into_iter() {
             builder.add_row(filters.into_iter().map(Filter::from));
         }
@@ -110,7 +110,7 @@ impl Filters {
     }
     pub fn new(OrFilters(dsl_value): OrFilters) -> Option<Self> {
         let cell_count = dsl_value.iter().map(|x| x.0.len()).sum();
-        let mut builder = JaggedArrayBuilder::new_with_capacity(dsl_value.len(), cell_count);
+        let mut builder = jagged_array::Builder::new_with_capacity(dsl_value.len(), cell_count);
         trace!(
             "new Filters with {} conjunction of total of {cell_count} terms",
             dsl_value.len()
@@ -211,13 +211,15 @@ impl Conjunction<'_> {
 impl<'a> InclusiveFilter<'a> {
     #[inline]
     pub fn all_included(self, ids: impl Iterator<Item = ComponentId>) -> bool {
-        let mut found = FixedBitSet::with_capacity(self.0.len());
+        let mut found = Bitset(Vec::with_capacity(self.0.len()));
+        let mut max = 0;
         for id in ids {
             if let Some(idx) = self.0.iter().position(|x| x.id() == id) {
-                found.set(idx, true);
+                found.enable_bit_extending(idx);
+                max = max.max(idx as usize);
             }
         }
-        found.count_ones(..) == self.0.len()
+        found.ones_in_range(..max).all_one()
     }
 }
 impl<'a> ExclusiveFilter<'a> {
