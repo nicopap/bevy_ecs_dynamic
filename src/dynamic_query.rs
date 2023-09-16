@@ -3,6 +3,7 @@ use bevy_reflect::Reflect;
 
 use crate::{fetches::Fetches, filters::Filters, DQuery, DynamicState, Fetch, OrFilters};
 
+#[derive(Debug)]
 pub enum DynamicItem<'a> {
     Entity(Entity),
     Read(&'a dyn Reflect),

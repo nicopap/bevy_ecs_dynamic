@@ -1,4 +1,4 @@
 check:
 	cargo clippy
 run:
-	RUST_BACKTRACE=1 cargo run -p query_interpreter
+	RUST_LOG=trace RUST_BACKTRACE=1 cargo test

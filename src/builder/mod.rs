@@ -5,11 +5,10 @@ use bevy_ecs::{component::ComponentId, prelude::Query, world::World};
 use bevy_reflect::ReflectFromPtr;
 
 use crate::DynamicQuery;
-use traits::{DFetches, DOr};
 
 pub use methods::DynamicQueryBuilder;
 pub use named::{NamedDynamicBuilder, NamedOrBuilder};
-pub use traits::DQuery;
+pub use traits::{DFetches, DOr, DQuery};
 
 mod methods;
 mod named;

@@ -1,14 +1,18 @@
 use std::fmt::Debug;
+use std::str::FromStr;
 
 use bevy::prelude::*;
+use bevy_ecs::query::{ReadOnlyWorldQuery, WorldQuery};
+use bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell;
 use bevy_ecs::{component::StorageType, system::SystemState};
 use cuicui_dsl::{dsl, DslBundle};
 use pretty_assertions::assert_str_eq;
 use test_log::test;
 
+use crate::builder::{DFetches, DOr};
 use crate::pretty_print::{DynShow, DynShowT, ShowReflect};
 use crate::{DQuery, DynamicQuery, DynamicQueryBuilder};
-use dy_cmp::Dyeq;
+use dy_cmp::{Dyeq, Dyown};
 
 mod dy_cmp;
 
@@ -20,25 +24,13 @@ enum Complexity {
     Fancy,
 }
 #[derive(Clone, Debug, Default)]
-struct Dsl {
+struct SpawnInstruction {
     storage: StorageType,
     registered: bool,
     complexity: Complexity,
 }
-#[rustfmt::skip]
-impl Dsl {
-    fn table(&mut self)  { self.storage = StorageType::Table; }
-    fn set(&mut self)    { self.storage = StorageType::SparseSet; }
-
-    fn reg(&mut self)    { self.registered = true; }
-    fn unreg(&mut self)  { self.registered = false; }
-
-    fn tag(&mut self)    { self.complexity = Complexity::Tag; }
-    fn simple(&mut self) { self.complexity = Complexity::Simple; }
-    fn fancy(&mut self)  { self.complexity = Complexity::Fancy; }
-}
-impl DslBundle for Dsl {
-    fn insert(&mut self, cmds: &mut cuicui_dsl::EntityCommands) -> Entity {
+impl SpawnInstruction {
+    fn insert(&mut self, cmds: &mut cuicui_dsl::EntityCommands) {
         use Complexity::{Fancy, Simple, Tag};
         use StorageType::{SparseSet, Table};
         #[rustfmt::skip]
@@ -56,6 +48,49 @@ impl DslBundle for Dsl {
             (SparseSet, false, Simple) => cmds.insert(SetNorgSimple::default()),
             (SparseSet, false, Fancy)  => cmds.insert(SetNorgFancy::default()),
         };
+    }
+}
+impl FromStr for SpawnInstruction {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let splits = s.split('-').collect::<Vec<_>>();
+        Ok(SpawnInstruction {
+            storage: match splits[0] {
+                "set" => StorageType::SparseSet,
+                "table" => StorageType::Table,
+                "" => default(),
+                _ => return Err(()),
+            },
+            registered: match splits[1] {
+                "reg" => true,
+                "unreg" => false,
+                "" => default(),
+                _ => return Err(()),
+            },
+            complexity: match splits[2] {
+                "tag" => Complexity::Tag,
+                "simple" => Complexity::Simple,
+                "fancy" => Complexity::Fancy,
+                "" => default(),
+                _ => return Err(()),
+            },
+        })
+    }
+}
+#[derive(Clone, Debug, Default)]
+struct Dsl {
+    to_spawn: Vec<SpawnInstruction>,
+}
+impl Dsl {
+    fn kind(&mut self, spec: &str) {
+        self.to_spawn.push(spec.parse().unwrap());
+    }
+}
+impl DslBundle for Dsl {
+    fn insert(&mut self, cmds: &mut cuicui_dsl::EntityCommands) -> Entity {
+        for mut to_spawn in self.to_spawn.drain(..) {
+            to_spawn.insert(cmds);
+        }
         cmds.id()
     }
 }
@@ -81,15 +116,15 @@ struct TableNorgFancy {
 
 // registered, table
 
-#[derive(Component, Reflect, Debug, Default)]
+#[derive(Component, Clone, PartialEq, Reflect, Debug, Default)]
 #[reflect(Component)]
 struct TableRegTag;
-#[derive(Component, Reflect, Debug, Default)]
+#[derive(Component, Clone, PartialEq, Reflect, Debug, Default)]
 #[reflect(Component)]
 struct TableRegSimple {
     x: usize,
 }
-#[derive(Component, Debug, PartialEq, Reflect, Default)]
+#[derive(Component, Clone, Debug, PartialEq, Reflect, Default)]
 #[reflect(Component)]
 struct TableRegFancy {
     zoo: usize,
@@ -121,17 +156,17 @@ struct SetNorgFancy {
 
 // registered, sparse set
 
-#[derive(Component, Reflect, Debug, Default)]
+#[derive(Component, Clone, PartialEq, Reflect, Debug, Default)]
 #[component(storage = "SparseSet")]
 #[reflect(Component)]
 struct SetRegTag;
-#[derive(Component, Reflect, Debug, Default)]
+#[derive(Component, Clone, PartialEq, Reflect, Debug, Default)]
 #[component(storage = "SparseSet")]
 #[reflect(Component)]
 struct SetRegSimple {
     x: usize,
 }
-#[derive(Component, Reflect, Debug, Default)]
+#[derive(Component, Clone, PartialEq, Reflect, Debug, Default)]
 #[component(storage = "SparseSet")]
 #[reflect(Component)]
 struct SetRegFancy {
@@ -195,28 +230,32 @@ fn test_world() -> World {
         dsl! {
             cmds,
             spawn() {
-                spawn(reg) {
-                    spawn(set) {
-                        spawn(reg, set, tag);
-                        spawn(reg, set, fancy);
-                        spawn(reg, set, simple);
+                spawn(kind("-reg-")) {
+                    spawn(kind("set--")) {
+                        spawn(kind("set-reg-tag"), kind("table-reg-fancy"));
+                        spawn(kind("set-reg-fancy"), kind("table-reg-tag"));
+                        spawn(kind("set-reg-simple"), kind("table-reg-fancy"));
+
+                        spawn(kind("table-reg-tag"), kind("set-reg-tag"));
+                        spawn(kind("table-reg-fancy"), kind("set-reg-fancy"));
+                        spawn(kind("table-reg-simple"), kind("set-reg-simple"));
                     }
-                    spawn(table) {
-                        spawn(reg, table, tag);
-                        spawn(reg, table, fancy);
-                        spawn(reg, table, simple);
+                    spawn(kind("table--")) {
+                        spawn(kind("table-reg-tag"));
+                        spawn(kind("table-reg-fancy"));
+                        spawn(kind("table-reg-simple"));
                     }
                 }
-                spawn(unreg) {
-                    spawn(set) {
-                        spawn(set, tag);
-                        spawn(set, fancy);
-                        spawn(set, simple);
+                spawn(kind("-unreg-")) {
+                    spawn(kind("set--")) {
+                        spawn(kind("set-unreg-tag"));
+                        spawn(kind("set-unreg-fancy"));
+                        spawn(kind("set-unreg-simple"));
                     }
-                    spawn(table) {
-                        spawn(table, tag);
-                        spawn(table, fancy);
-                        spawn(table, simple);
+                    spawn(kind("table--")) {
+                        spawn(kind("table-unreg-tag"));
+                        spawn(kind("table-unreg-fancy"));
+                        spawn(kind("table-unreg-simple"));
                     }
                 }
             }
@@ -230,11 +269,11 @@ fn test_world() -> World {
 fn test_query_get<DQ: DQuery>(
     world: &mut World,
     entity: Entity,
-    expected: impl ShowReflect + Dyeq + Debug,
+    expected: impl ShowReflect + Dyeq,
 ) {
     let query = DynamicQuery::from_query::<DQ>(world);
     let mut state = query.state(world);
-    let value = state.get(&world, entity).unwrap();
+    let value = state.get_mut(world, entity).unwrap();
 
     let equivalent = expected.dyeq(value);
     if !equivalent {
@@ -243,12 +282,52 @@ fn test_query_get<DQ: DQuery>(
         assert_str_eq!(expected, actual);
     }
 }
+#[track_caller]
+fn test_single_entity<Q, F>(mut world: World)
+where
+    Q: DFetches + WorldQuery,
+    for<'w> Q::Item<'w>: Dyown,
+    for<'w> <Q::Item<'w> as Dyown>::Owned: Dyeq + ShowReflect + 'static,
+    F: DOr + ReadOnlyWorldQuery,
+{
+    let world = world.as_unsafe_world_cell();
+
+    let results = {
+        let first_world = unsafe { world.world_mut() };
+        let mut fancy_entity = first_world.query_filtered::<(Entity, Q), F>();
+        fancy_entity
+            .iter_mut(first_world)
+            .map(|(e, o)| (e, o.own()))
+            .collect::<Vec<_>>()
+    };
+    assert!(!results.is_empty());
+    {
+        let second_world = unsafe { world.world_mut() };
+        for (entity, owned) in results.into_iter() {
+            test_query_get::<Query<Q, F>>(second_world, entity, owned)
+        }
+    }
+}
 #[test]
 fn simple_table_query() {
-    let mut world = test_world();
-    let mut fancy_entity = world.query_filtered::<Entity, With<TableRegFancy>>();
-    let fancy_entity = fancy_entity.get_single(&world).unwrap();
-
-    let mut f = TableRegFancy::default();
-    test_query_get::<Query<&TableRegFancy>>(&mut world, fancy_entity, &f)
+    test_single_entity::<&TableRegFancy, ()>(test_world());
+}
+#[test]
+fn simple_sparse_query() {
+    test_single_entity::<&SetRegFancy, ()>(test_world());
+}
+#[test]
+fn two_fetch_sparse_query() {
+    test_single_entity::<(&SetRegFancy, &mut TableRegTag), ()>(test_world());
+}
+#[test]
+fn with_query() {
+    test_single_entity::<&SetRegFancy, With<TableRegFancy>>(test_world());
+}
+#[test]
+fn or_query() {
+    test_single_entity::<
+        (Option<&SetRegFancy>, Option<&mut TableRegFancy>),
+        Or<(With<SetRegFancy>, With<TableRegFancy>)>,
+    >(test_world());
 }
