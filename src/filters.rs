@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use bevy_ecs::archetype::Archetype;
 use bevy_ecs::component::{ComponentId, Tick};
 use bevy_ecs::world::unsafe_world_cell::UnsafeEntityCell;
+use datazoo::jagged_array::{self, JaggedArray, JaggedArrayRows};
 use datazoo::Bitset;
-use datazoo::{jagged_array, jagged_array::JaggedArrayRows, JaggedArray};
 use tracing::trace;
 
 use crate::builder::{AndFilter, AndFilters, OrFilters};
@@ -76,6 +76,7 @@ impl From<AndFilter> for Filter {
 pub struct Conjunction<'a> {
     filters: &'a [Filter],
 }
+#[derive(Clone)]
 pub struct Conjunctions<'a>(JaggedArrayRows<'a, Filter>);
 impl<'a> Iterator for Conjunctions<'a> {
     type Item = Conjunction<'a>;
@@ -90,10 +91,10 @@ struct ChangedFilter<'a>(&'a [Filter]);
 struct AddedFilter<'a>(&'a [Filter]);
 
 impl Filters {
-    pub const fn len(&self) -> usize {
-        self.0.len()
+    pub fn len(&self) -> usize {
+        self.0.height()
     }
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
     /// # Safety
@@ -172,6 +173,11 @@ fn filters(filters: &[Filter]) -> (InclusiveFilter, ExclusiveFilter) {
     (InclusiveFilter(inclusive), ExclusiveFilter(exclusive))
 }
 impl Conjunction<'_> {
+    pub(crate) fn has_tick_filter(&self) -> bool {
+        use FilterKind::{Added, Changed};
+        let has_tick = |f: &Filter| matches!(f.kind(), Added | Changed);
+        self.filters.iter().fold(false, |acc, f| acc | has_tick(f))
+    }
     // O(n²) where n is sizeof archetype
     pub fn includes(&self, fetches: &Fetches, archetype: &Archetype) -> bool {
         // NOTE(perf): We don't skip this on `fetch_archetype == false` because
@@ -185,20 +191,21 @@ impl Conjunction<'_> {
         fetch_archetype && include_filter && !exclude_filter
     }
 
-    // NOTE: unlike `fetches::FetchesIter::next`, we can't assume we are on the
-    // right table, because we may call this with a table from a different conjunction.
-    // TODO(perf): This needs to be cached.
-    // O(n * c) where n is sizeof archetype, c how many components in conjunciton
-    pub fn within_tick(&self, ticks: Ticks, entity: UnsafeEntityCell) -> bool {
-        let Ticks { last_run, this_run } = ticks;
-        let archetype = entity.archetype();
+    // `O(n²)` where `n` is number of filters
+    pub fn in_filter(&self, archetype: &Archetype) -> bool {
+        // NOTE(perf): We don't skip this on `fetch_archetype == false` because
+        // we hope the optimizer can merge `all_included` `for` with this one.
         let (inclusive, exclusive) = filters(self.filters);
         let include_filter = inclusive.all_included(archetype.components());
         let exclude_filter = exclusive.any_excluded(archetype.components());
+        trace!("inc:{include_filter}, exc:{exclude_filter}");
 
-        if !include_filter || exclude_filter {
-            return false;
-        }
+        include_filter && !exclude_filter
+    }
+
+    // `O(c)` where `c` number of tick filters.
+    pub fn within_tick(&self, ticks: Ticks, entity: UnsafeEntityCell) -> bool {
+        let Ticks { last_run, this_run } = ticks;
         let (changed, added) = tick_filters(self.filters);
         let changed = changed.within_tick(entity, last_run, this_run);
         let added = added.within_tick(entity, last_run, this_run);

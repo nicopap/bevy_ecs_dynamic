@@ -12,6 +12,7 @@ macro_rules! assert_invariant {
     }};
 }
 
+mod archematch;
 pub mod builder;
 mod debug_unchecked;
 mod dynamic_query;

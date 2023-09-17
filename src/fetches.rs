@@ -61,7 +61,7 @@ impl Fetches {
         let components = JaggedArray::new(ends, data).unwrap();
         Some(Fetches { has_entity, components })
     }
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.components.len() + (self.has_entity as u8 as usize)
     }
     #[inline]

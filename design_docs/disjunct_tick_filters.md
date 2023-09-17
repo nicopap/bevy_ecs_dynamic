@@ -38,3 +38,8 @@ A better approach is to:
    This replaces the `MatchedArchetypes` unified `Bitset` actually…
 3. When iterating, go through each disjunct filter one after another
 4. When `get`-ing, we need to check the archetype in each disjunction.
+
+### Solution but
+
+It's a bit too complex, so I'll simply store a second `Bitset` as a mask on
+which archetype needs to be updated.

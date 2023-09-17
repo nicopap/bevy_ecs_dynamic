@@ -1,26 +1,13 @@
-use std::iter;
-
-use bevy_ecs::archetype::{Archetype, ArchetypeId, Archetypes};
+use bevy_ecs::archetype::Archetypes;
 use bevy_ecs::world::unsafe_world_cell::{UnsafeEntityCell, UnsafeWorldCell};
 use bevy_ecs::{component::Tick, prelude::Entity, world::World};
-use datazoo::{bitset::Ones, Bitset};
 use thiserror::Error;
-use tracing::trace;
 
+use crate::archematch::MatchedArchetypes;
 use crate::dynamic_query::{DynamicItem, DynamicQuery};
 use crate::iter::{DynamicQueryIter, RoDynamicQueryIter};
 use crate::maybe_item::{assume_init_mut, MaybeDynamicItem};
 use crate::{fetches::Fetches, filters::Filters};
-
-fn u32_to_archetype_id(u32: u32) -> ArchetypeId {
-    unsafe { std::mem::transmute(u32) }
-}
-fn archetype_id_to_u32(id: ArchetypeId) -> u32 {
-    // SAFETY: ArchetypeId is repr(transparent) u32
-    unsafe { std::mem::transmute(id) }
-}
-#[derive(Default, Clone, Debug)]
-pub(crate) struct MatchedArchetypes(Bitset<Vec<u32>>);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Ticks {
@@ -38,25 +25,6 @@ impl Ticks {
     }
 }
 
-impl MatchedArchetypes {
-    fn add_archetype(&mut self, id: ArchetypeId) {
-        let id = archetype_id_to_u32(id);
-        self.0.enable_bit_extending(id as usize);
-    }
-
-    fn contains(&self, entity_archetype: ArchetypeId) -> bool {
-        trace!("Contains {entity_archetype:?}?");
-        let id = archetype_id_to_u32(entity_archetype);
-        let yes = self.0.bit(id as usize);
-        trace!("> {yes}");
-        yes
-    }
-
-    pub(crate) fn iter(&self) -> iter::Map<Ones, fn(u32) -> ArchetypeId> {
-        self.0.ones_in_range(..).map(u32_to_archetype_id)
-    }
-}
-
 #[derive(Debug, Error)]
 pub enum DynamicQueryError {
     #[error("No entity with id {0:?} exists in the world.")]
@@ -65,8 +33,6 @@ pub enum DynamicQueryError {
         "Entity with id {0:?} doesn't have the right set of components to satisfy DynamicState."
     )]
     Unmatched(Entity),
-    #[error("A `Changed` or `Added` filter means {0:?} doesn't satisfy DynamicState.")]
-    NotInTick(Entity),
 }
 
 #[derive(Clone, Debug)]
@@ -88,15 +54,11 @@ impl DynamicState {
         let mut state = DynamicState {
             fetches: query.fetches.clone(),
             filters: query.filters.clone(),
-            archetype_ids: MatchedArchetypes::default(),
+            archetype_ids: MatchedArchetypes::new(&query.fetches, &query.filters, world),
             item_buffer,
         };
-        for archetype in world.iter() {
-            state.add_archetype(archetype);
-        }
         state
     }
-    // TODO(perf): O(n * c) where 'n' size of archetype & 'c' number of conjunctions
     /// Verify if this `DynamicState` matches `archetype`, adding it to its internal list
     /// of archetypes and returns `true` if so.
     ///
@@ -106,20 +68,9 @@ impl DynamicState {
     ///
     /// This is `O(n * c)` where 'n' is the size of the archetype and 'c' is
     /// the number of filter conjunctions (ie: `Or` clauses).
-    pub fn add_archetype(&mut self, archetype: &Archetype) -> bool {
-        let conjs = self.filters.len();
-        trace!("add_arch? {:?}, {conjs} conjs", archetype.id());
-        let matches = if self.filters.is_empty() {
-            self.fetches.all_included(archetype.components())
-        } else {
-            let mut conjunctions = self.filters.conjunctions();
-            conjunctions.any(|c| c.includes(&self.fetches, archetype))
-        };
-        if matches {
-            self.archetype_ids.add_archetype(archetype.id());
-            trace!("> matches!");
-        }
-        matches
+    pub fn add_archetypes(&mut self, archetypes: &Archetypes) {
+        self.archetype_ids
+            .add_archetypes(&self.fetches, &self.filters, archetypes);
     }
 
     /// Overwrites `self.item_buffer` with the `fetch` items from provided
@@ -150,13 +101,9 @@ impl DynamicState {
         let dangling_entity = DynamicQueryError::Dangling(entity);
         let entity = world.get_entity(entity).ok_or(dangling_entity)?;
         let archetype = entity.archetype();
-        if !self.archetype_ids.contains(archetype.id()) {
+        let getter = self.archetype_ids.getter(&self.filters);
+        if !getter.contains(ticks, entity) {
             return Err(DynamicQueryError::Unmatched(entity.id()));
-        }
-
-        let mut conjunctions = self.filters.conjunctions();
-        if !conjunctions.any(|c| c.within_tick(ticks, entity)) {
-            return Err(DynamicQueryError::NotInTick(entity.id()));
         }
         Ok(self.buffer_row(entity))
     }

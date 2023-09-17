@@ -1,9 +1,7 @@
-use std::iter;
-
-use bevy_ecs::archetype::{ArchetypeEntity, ArchetypeId};
+use bevy_ecs::archetype::ArchetypeEntity;
 use bevy_ecs::world::unsafe_world_cell::{UnsafeEntityCell, UnsafeWorldCell};
-use datazoo::bitset::Ones;
 
+use crate::archematch::{ArchematchIter, CheckTick};
 use crate::debug_unchecked::DebugUnchecked;
 use crate::state::Ticks;
 use crate::{fetches::Fetches, filters::Filters, DynamicItem, DynamicState};
@@ -27,7 +25,8 @@ pub struct RoDynamicQueryIter<'w, 's> {
     world: UnsafeWorldCell<'w>,
     fetch: &'s Fetches,
     filter: &'s Filters,
-    ids: iter::Map<Ones<'s>, fn(u32) -> ArchetypeId>,
+    ids: ArchematchIter<'s>,
+    check: CheckTick,
     buffer: Option<Box<[DynamicItem<'w>]>>,
     ticks: Ticks,
 }
@@ -41,28 +40,30 @@ impl<'w, 's> RoDynamicQueryIter<'w, 's> {
     fn next_entity(&mut self) -> Option<UnsafeEntityCell<'w>> {
         loop {
             let Some((first, remaining)) = self.entities.split_first() else {
-                let Some(next_archetype) = self.ids.next() else {
+                let Some((next_archetype, check)) = self.ids.next() else {
                     return None;
                 };
                 let archetype = self.world.archetypes().get(next_archetype);
                 let archetype = unsafe { archetype.prod_unchecked_unwrap() };
+                self.check = check;
                 self.entities = archetype.entities();
                 continue;
             };
             self.entities = remaining;
 
+            // TODO(perf): move this inside the check, so that base case has 0
+            // indirection.
             let entity = self.world.get_entity(first.entity());
             let entity = unsafe { entity.prod_unchecked_unwrap() };
-
-            let mut conjunctions = self.filter.conjunctions();
-            if conjunctions.any(|c| c.within_tick(self.ticks, entity)) {
+            if self.check.within_tick(&self.ids, self.ticks, entity) {
                 return Some(entity);
             }
         }
     }
     pub fn new(world: UnsafeWorldCell<'w>, state: &'s DynamicState) -> Self {
         let mut this = Self {
-            ids: state.archetype_ids.iter(),
+            ids: state.archetype_ids.iter(&state.filters),
+            check: CheckTick::default(),
             filter: &state.filters,
             fetch: &state.fetches,
             entities: &[][..],
@@ -97,7 +98,8 @@ pub struct DynamicQueryIter<'w, 's>(RoDynamicQueryIter<'w, 's>);
 impl<'w, 's> DynamicQueryIter<'w, 's> {
     pub fn new(world: UnsafeWorldCell<'w>, state: &'s DynamicState) -> Self {
         let mut this = RoDynamicQueryIter {
-            ids: state.archetype_ids.iter(),
+            ids: state.archetype_ids.iter(&state.filters),
+            check: CheckTick::default(),
             filter: &state.filters,
             fetch: &state.fetches,
             entities: &[][..],
